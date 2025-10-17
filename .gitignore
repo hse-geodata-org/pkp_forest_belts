@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+data/
+result/
+.secret/
+fabdem/
+lulc/
+.secret/.iamtoken
+.secret/.jwt
+.secret/.yinfo
+.secret/.yinfo copy
+.secret/pkp-bot-service-account-auth-key.json
