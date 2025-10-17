@@ -13,6 +13,7 @@ data/
 result/
 .secret/
 fabdem/
+whitebox/
 lulc/
 .secret/.iamtoken
 .secret/.jwt
