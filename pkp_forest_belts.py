@@ -2654,13 +2654,6 @@ def belt_calculate_secondary_belt(
     return secondary_belt_gdf
 
 
-def belt_calculate_road_belt(
-    region: str='Липецкая область',
-    
-):
-    pass
-
-
 def calculate_forest_belt(
     region: str='Липецкая область',
     limitations_all: gpd.GeoDataFrame=None,   # geodataframe derived from prepare_limitations
@@ -2792,7 +2785,7 @@ def calculate_forest_belt(
     )
 
     return main_belt, gully_belt, forestation
-    
+
 
 def prepare_road_limitations(
     postgres_info='.secret/.gdcdb',
@@ -2905,6 +2898,264 @@ def prepare_road_limitations(
             layer=f"{region_shortname}_road_OSM_cover_buf"
         )
         return road_OSM_cover_buf
+    return None
+
+
+# def belt_calculate_road_belt(
+#     region: str='Липецкая область',
+    
+# ):
+#     pass
+
+
+def belt_calculate_road_belt(
+    postgres_info='.secret/.gdcdb',
+    region='Липецкая область', 
+    regions_table='admin.hse_russia_regions',
+    region_buf_size=5000,
+    road_table='osm.gis_osm_roads_free',
+    road_buf_size_rule={
+        "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+        "fclass in ('secondary' , 'secondary_link')": 3.5,
+        "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3,
+        "fclass not in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link', 'secondary' , 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified')": 0.1
+    },
+    road_buffer_crs='utm',
+    forest_50m: gpd.GeoDataFrame=None,
+    limitation_full: gpd.GeoDataFrame=None,
+    build_gdf: gpd.GeoDataFrame=None
+):
+    region_shortname = get_region_shortname(region)
+    if region_shortname is None:
+        region_shortname = "region"
+    try:
+        with open(postgres_info, encoding='utf-8') as f:
+            pg = json.load(f)
+    except:
+        raise
+    try:
+        engine = sqlalchemy.create_engine(
+            f"postgresql+psycopg2://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{pg['database']}",
+            connect_args={
+                "sslmode": "verify-full",
+                "target_session_attrs": "read-write"
+            },
+        )
+    except:
+        raise
+    try:
+        sql = f"select * from {regions_table} where lower(region) = '{region.lower()}';"
+        with engine.connect() as conn:
+            region_gdf = gpd.read_postgis(sql, conn)
+        if region_buf_size > 0:
+            region_buffer = calculate_geod_buffers(region_gdf, 'laea', 'value', region_buf_size, geom_field='geom')
+            region_gdf = region_gdf.set_geometry(region_buffer)
+        
+        sql = f"select * from {road_table} road " \
+            f"where (ST_Intersects(" \
+            f"(select ST_Buffer(geom::geography, {region_buf_size})::geometry from {regions_table} where lower(region) = '{region.lower()}' limit 1), " \
+            f"road.geom" \
+            f")) " \
+            f"and ((road.fclass in ('primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')) or (road.fclass = 'unclassified' and road.ref !~ ' .*'));"
+
+        with engine.connect() as conn:
+            road_gdf = gpd.read_postgis(sql, conn)
+
+        
+    except:
+        raise
+    pass
+
+    # Calculate buffer size per road based on provided rules
+    # Prefer 'fname' if available, otherwise use 'fclass'
+    match_field = 'fclass'
+    if match_field not in road_gdf.columns:
+        raise RuntimeError(
+            f"'fclass' not exists in {road_table}; available columns: {list(road_gdf.columns)}"
+        )
+
+    # Initialize column
+    road_gdf['buf_size'] = np.nan
+
+    # Parse rule keys like "fclass in ('primary','secondary')" or "fclass = 'unclassified'"
+    token_re = re.compile(r"'([^']+)'")
+    for rule, size in road_buf_size_rule.items():
+        # Extract all quoted tokens
+        tokens = token_re.findall(rule)
+        if tokens:
+            mask = road_gdf[match_field].isin(tokens)
+            road_gdf.loc[mask, 'buf_size'] = size
+        else:
+            # Fallback: if rule text directly equals a single value (no quotes), try exact match
+            value = rule.strip()
+            if value:
+                road_gdf.loc[road_gdf[match_field] == value, 'buf_size'] = size
+
+    # Convert to nullable integer type if possible
+    try:
+        road_gdf['buf_size'] = road_gdf['buf_size'].astype('Int64')
+        pass
+    except Exception:
+        pass
+
+    road_gdf = road_gdf[road_gdf['buf_size'] > 0]
+    # Build per-feature buffers using buf_size field
+    road_buffers_geom_name = road_gdf.geometry.name
+    road_buffers = calculate_geod_buffers(
+        i_gdf=road_gdf,
+        buffer_crs=road_buffer_crs,
+        buffer_dist_source='field',
+        buffer_distance='buf_size',
+        geom_field=road_buffers_geom_name
+    )
+    road_OSM_cover_polygon = road_gdf.copy()
+    road_OSM_cover_polygon = road_gdf.set_geometry(road_buffers)
+    
+
+    # от слоя road_OSM_cover_polygon строим множественный буфер
+    # 1) tertiary_unclassified
+    tertiary_unclassified_roads = road_OSM_cover_polygon[road_OSM_cover_polygon['fclass'].isin(['tertiary', 'unclassified'])]
+    tertiary_unclassified_45m_buf_geom = calculate_geod_buffers(
+        i_gdf=tertiary_unclassified_roads,
+        buffer_crs=road_buffer_crs,
+        buffer_dist_source='value',
+        buffer_distance=45,
+        geom_field=road_buffers_geom_name
+    )
+    tertiary_unclassified_45m_buf = tertiary_unclassified_roads.copy().set_geometry(tertiary_unclassified_45m_buf_geom)
+    
+    tertiary_unclassified_30m_buf_geom = calculate_geod_buffers(
+        i_gdf=tertiary_unclassified_roads,
+        buffer_crs=road_buffer_crs,
+        buffer_dist_source='value',
+        buffer_distance=30,
+        geom_field=road_buffers_geom_name
+    )
+    tertiary_unclassified_30m_buf = tertiary_unclassified_roads.copy().set_geometry(tertiary_unclassified_30m_buf_geom)
+
+    # tertiary_unclassified_45m_buf = tertiary_unclassified_45m_buf.overlay(tertiary_unclassified_30m_buf, how='difference')
+    # tertiary_unclassified_30m_buf = tertiary_unclassified_30m_buf.overlay(tertiary_unclassified_roads, how='difference')
+    tertiary_unclassified_45m_buf[road_buffers_geom_name] = [
+        geom_45.difference(geom_30) for geom_45, geom_30 in zip(
+            tertiary_unclassified_45m_buf.geometry,
+            tertiary_unclassified_30m_buf.geometry
+        )
+    ]
+    tertiary_unclassified_30m_buf[road_buffers_geom_name] = [
+        geom_30.difference(geom_0) for geom_30, geom_0 in zip(
+            tertiary_unclassified_30m_buf.geometry,
+            tertiary_unclassified_roads.geometry
+        )
+    ]
+    tertiary_unclassified_45m_buf['distance'] = 45
+    tertiary_unclassified_30m_buf['distance'] = 30
+
+    tertiary_unclassified_30_45 = pd.concat([tertiary_unclassified_30m_buf, tertiary_unclassified_45m_buf], ignore_index=True)
+    # tertiary_unclassified_30_45 = tertiary_unclassified_30_45.dissolve(by='distance', dropna=False)
+    # tertiary_unclassified_30_45 = tertiary_unclassified_30_45.explode()
+
+    # 2) tertiary_link
+    tertiary_link_roads = road_OSM_cover_polygon[road_OSM_cover_polygon['fclass'].isin(['tertiary_link'])]
+    tertiary_link_30m_buf_geom = calculate_geod_buffers(
+        i_gdf=tertiary_link_roads,
+        buffer_crs=road_buffer_crs,
+        buffer_dist_source='value',
+        buffer_distance=30,
+        geom_field=road_buffers_geom_name
+    )
+    tertiary_link_30m_buf = tertiary_link_roads.copy().set_geometry(tertiary_link_30m_buf_geom)
+    tertiary_link_30m_buf['distance'] = 30
+    
+    tertiary_link_55m_buf_geom = calculate_geod_buffers(
+        i_gdf=tertiary_link_roads,
+        buffer_crs=road_buffer_crs,
+        buffer_dist_source='value',
+        buffer_distance=55,
+        geom_field=road_buffers_geom_name
+    )
+    tertiary_link_55m_buf = tertiary_link_roads.copy().set_geometry(tertiary_link_55m_buf_geom)
+    tertiary_link_55m_buf['distance'] = 55
+
+    tertiary_link_55m_buf[road_buffers_geom_name] = [
+        geom_55.difference(geom_30) for geom_55, geom_30 in zip(
+            tertiary_link_55m_buf.geometry,
+            tertiary_link_30m_buf.geometry
+        )
+    ]
+    tertiary_link_30m_buf[road_buffers_geom_name] = [
+        geom_30.difference(geom_0) for geom_30, geom_0 in zip(
+            tertiary_link_30m_buf.geometry,
+            tertiary_link_roads.geometry
+        )
+    ]
+
+    tertiary_link_30_55 = pd.concat([tertiary_link_30m_buf, tertiary_link_55m_buf], ignore_index=True)
+    # tertiary_link_30_55 = tertiary_link_30_55.dissolve(by='distance', dropna=False)
+    # tertiary_link_30_55 = tertiary_link_30_55.explode()
+
+    # tertiary_unclassified_30_45.to_file(
+    #     # 'result/forest_limitations.gpkg', 
+    #     f"result/{region_shortname}_limitations.gpkg", 
+    #     layer=f"{region_shortname}_tertiary_unclassified_30_45"
+    # )
+    # tertiary_link_30_55.to_file(
+    #     # 'result/forest_limitations.gpkg', 
+    #     f"result/{region_shortname}_limitations.gpkg", 
+    #     layer=f"{region_shortname}_tertiary_link_30_55"
+    # )
+    # pass
+
+
+    # удаляем наложения Стирание, входные объекты - слой (30,45), стриаюзщие слой с 30,55
+    tertiary_unclassified_30_45 = tertiary_unclassified_30_45.overlay(tertiary_link_30_55, how='difference')
+
+    # объединяем 2 слоя буферов (Слияние) (исходные 30,55 + обрезанные 30,25), не настраиваем поля слияния, сохраняем в road_belt_prepare
+    road_belt_prepare = pd.concat([tertiary_unclassified_30_45, tertiary_link_30_55], ignore_index=True)
+
+    # удаляем расстояние на траве (30 м) (выборка по distance = 30)
+    road_belt_prepare = road_belt_prepare[road_belt_prepare['distance'] != 30]
+
+    # road_belt_prepare.to_file(
+    #     # 'result/forest_limitations.gpkg', 
+    #     f"result/{region_shortname}_limitations.gpkg", 
+    #     layer=f"{region_shortname}_road_belt_prepare"
+    # )
+    # pass
+
+    # стереть участки, попадающие в ограничения. стираем последовательно слоями forest_50m и limitation 
+    if forest_50m is None or limitation_full is None:
+        raise ValueError("forest_50m or limitation_full is None")
+    road_belt_prepare = road_belt_prepare.overlay(forest_50m, how='difference')
+    road_belt_prepare = road_belt_prepare.overlay(limitation_full, how='difference')
+
+    # также исключаем проектирование на застроенных территориях (полосы могут попасть в промышленные зоны, например) – стираем все, что попало под вектор build из LULC
+    if build_gdf is None:
+        raise ValueError("build_gdf is None")
+    road_belt_prepare = road_belt_prepare.overlay(build_gdf, how='difference')
+
+    road_belt_prepare = road_belt_prepare.dissolve(by=['distance'], dropna=False)
+    # составной в простые
+    road_belt_prepare = road_belt_prepare.explode()
+
+    # Calculate geodesic area in hectares
+    geod = Geod(ellps='WGS84')
+    areas_ha = []
+    for geom in road_belt_prepare.geometry:
+        try:
+            area_m2, _ = geod.geometry_area_perimeter(geom)
+            areas_ha.append(abs(area_m2) / 10000.0)
+        except Exception:
+            areas_ha.append(0.0)
+    road_belt_prepare['area_ha'] = pd.to_numeric(areas_ha, errors='coerce')
+
+    road_belt_prepare = road_belt_prepare[road_belt_prepare['area_ha'] > 0.2]
+    
+    if not road_belt_prepare.empty:
+        road_belt_prepare.to_file(
+            f"result/{region_shortname}_limitations.gpkg", 
+            layer=f"{region_shortname}_road_belt_prepare"
+        )    
+        return road_belt_prepare
     return None
 
 
@@ -3183,18 +3434,22 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_lulc.gpkg', 
     #     layer='Lipetskaya_lulc_forest'
     #     )
+    build_gdf = gpd.read_file(
+        'result/Lipetskaya_lulc.gpkg', 
+        layer='Lipetskaya_lulc_build'
+        )
     # limitations_all = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_all_limitations'
     #     )
-    road_OSM_cover_buf = gpd.read_file(
-        'result/Lipetskaya_limitations.gpkg', 
-        layer='Lipetskaya_road_OSM_cover_buf'
-        )
-    # forest_50m = gpd.read_file(
+    # road_OSM_cover_buf = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
-    #     layer='Lipetskaya_forest_50m'
+    #     layer='Lipetskaya_road_OSM_cover_buf'
     #     )
+    forest_50m = gpd.read_file(
+        'result/Lipetskaya_limitations.gpkg', 
+        layer='Lipetskaya_forest_50m'
+        )
     # arable_gdf = gpd.read_file(
     #     'result/Lipetskaya_lulc.gpkg', 
     #     layer='Lipetskaya_lulc_arable'
@@ -3320,23 +3575,23 @@ if __name__ == '__main__':
     #     arable_gdf=arable_gdf
     # )
 
-    forestation = belt_calculate_forestation(
-        region='Липецкая область',
-        main_belt=main_belt, 
-        gully_belt=gully_belt, 
-        limitation_full=limitation_full,
-        road_OSM_cover_buf=road_OSM_cover_buf,
-        postgres_info='.secret/.gdcdb',
-        regions_table='admin.hse_russia_regions', 
-        region_buf_size=0,
-        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-        meadows_raster='lulc/lulc_meadows.tif',
-        tpi_threshold=-2,
-        tpi_window_size_m=1000,
-        slope_threshold=12
-    )
-    pass
+    # forestation = belt_calculate_forestation(
+    #     region='Липецкая область',
+    #     main_belt=main_belt, 
+    #     gully_belt=gully_belt, 
+    #     limitation_full=limitation_full,
+    #     road_OSM_cover_buf=road_OSM_cover_buf,
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='admin.hse_russia_regions', 
+    #     region_buf_size=0,
+    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+    #     meadows_raster='lulc/lulc_meadows.tif',
+    #     tpi_threshold=-2,
+    #     tpi_window_size_m=1000,
+    #     slope_threshold=12
+    # )
+    # pass
 
     # belt_calculate_secondary_belt(
     #     postgres_info='.secret/.gdcdb',
@@ -3350,6 +3605,23 @@ if __name__ == '__main__':
     #     gully_belt=gully_belt,
     #     meadow_gdf=meadow_gdf
     # )
+
+    road_belt_prepare = belt_calculate_road_belt(
+        postgres_info='.secret/.gdcdb',
+        region='Липецкая область', 
+        regions_table='admin.hse_russia_regions',
+        region_buf_size=5000,
+        road_table='osm.gis_osm_roads_free',
+        road_buf_size_rule={
+            "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+            "fclass in ('secondary' , 'secondary_link')": 3.5,
+            "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
+        },
+        road_buffer_crs='utm',
+        forest_50m=forest_50m,
+        limitation_full=limitation_full,
+        build_gdf=build_gdf
+    )
 
     pass
     # prepare_road_limitations(
