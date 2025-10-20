@@ -2918,7 +2918,7 @@ def belt_calculate_road_belt(
         "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
         "fclass in ('secondary' , 'secondary_link')": 3.5,
         "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3,
-        "fclass not in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link', 'secondary' , 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified')": 0.1
+        "fclass not in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link', 'secondary' , 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified')": 0
     },
     road_buffer_crs='utm',
     forest_50m: gpd.GeoDataFrame=None,
