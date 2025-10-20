@@ -2065,7 +2065,8 @@ def belt_calculate_forestation(
     meadows_raster='lulc/lulc_meadows.tif',
     use_wbt=False  # whitebox_workflows produces corrupted output (left side only), use GDAL instead
 ):
-    print("calculating forestation areas...")
+    print(f"#######{region} - РАСЧЕТ ЗОН СПЛОШНОГО ОБЛЕСЕНИЯ#######")
+    print(" - загрузка разграфки FABDEM на территорию региона...")
     pass
     # Загрузка параметров подключения к PostgreSQL из JSON-файла
     try:   
@@ -2107,8 +2108,8 @@ def belt_calculate_forestation(
     if not os.path.isdir(fabdemdir):
         os.mkdir(fabdemdir)
     final_gdf = None
-
-    for i, row in tqdm(tiles_gdf.iterrows(), desc='tiles loop', total=tiles_gdf.shape[0]):
+    print(" - начат перебор тайлов FABDEM на территорию региона...")
+    for i, row in tqdm(tiles_gdf.iterrows(), desc='Перебор тайлов FABDEM', total=tiles_gdf.shape[0]):
         lat = row['geom'].centroid.y
         pass
         # extract current Fabdem tile
@@ -2124,6 +2125,7 @@ def belt_calculate_forestation(
         input_file = os.path.join(fabdemdir, filename)
         input_dem = gdal.Open(input_file)
         ##################по Fabdem рассчитать индекс TPI#################
+        print(f" - расчет TPI для {filename}...")
         output_tpi = os.path.join(fabdemdir, filename.replace('.tif', '_tpi.tif'))
         if input_dem is None:
             print(f"Error: Could not open {os.path.join(fabdemdir, filename)}")
@@ -2172,6 +2174,7 @@ def belt_calculate_forestation(
             pass
         
         # Reclass TPI: values < threshold -> nodata, others -> 1
+        print(f" - рекласс TPI для {filename}...")
         with rasterio.open(output_tpi) as src:
             tpi_data = src.read(1)
             profile = src.profile.copy()
@@ -2219,8 +2222,19 @@ def belt_calculate_forestation(
             with rasterio.open(output_tpi_reclassed, 'w', **profile) as dst:
                 dst.write(reclassed_resampled.astype(profile['dtype']), 1)
         
+        # Save a copy of input_file using 'COMPRESS=LZW' and 'TILED=YES'
+        print(f" - сохраняю копию {filename} со сжатием LZW...")
+        output_file_lzw = os.path.join(fabdemdir, filename.replace('.tif', '_lzw.tif'))
+        lzw_profile = profile.copy()
+        lzw_profile.update({'compress': 'lzw', 'tiled': True})
+        with rasterio.open(input_file) as src:
+            with rasterio.open(output_file_lzw, 'w', **lzw_profile) as dst:
+                dst.write(src.read(1), 1)
+        
+        
         
         # Calculate slope
+        print(f" - расчет крутизны склона для {filename}...")
         input_dem = None
         output_slope = os.path.join(fabdemdir, filename.replace('.tif', '_slope.tif'))
         if not use_wbt:
@@ -2242,24 +2256,19 @@ def belt_calculate_forestation(
                     )
                 input_dem = None
         else:
-            try:
-                with ZipFile(zippath, 'r') as zObject:
-                    zObject.extract(filename, path=wbdir)
-                # print(f"Successfully extracted '{file_to_extract}' to '{destination_directory}'")
-            except:
-                raise
-            input_file = os.path.join(wbdir, filename)
-            output_slope = os.path.join(wbdir, filename.replace('.tif', '_slope.tif'))            
+            # input_file = os.path.join(wbdir, filename)
+            output_slope = os.path.join(fabdemdir, filename.replace('.tif', '_slope.tif'))            
             wbe = wbt.WbEnvironment()
-            # wbe.working_directory = fabdemdir
+            wbe.working_directory = fabdemdir
             # Read DEM
-            dem = wbe.read_raster(input_file)
+            dem = wbe.read_raster(output_file_lzw)
             slope_raster = wbe.slope(dem, units='degrees')
             wbe.write_raster(slope_raster, output_slope)
             wbe = None
             pass
             
         # Reclass Slope: values < threshold -> nodata, others -> 1
+        print(f" - рекласс крутизны склона для {filename}...")
         with rasterio.open(output_slope) as src:
             slope_data = src.read(1)
             profile = src.profile.copy()
@@ -2309,6 +2318,7 @@ def belt_calculate_forestation(
             
             
         # Open meadows raster and reproject to EPSG:4326                
+        print(f" - открываю и перепроецирую растр meadows...")
         with rasterio.open(meadows_raster) as src_meadows:
             # Get transform and dimensions for EPSG:4326 matching the DEM tile
             with rasterio.open(output_tpi_reclassed) as ref:
@@ -2350,6 +2360,7 @@ def belt_calculate_forestation(
         pass
     
         # Multiply the three rasters: TPI, Slope, and Meadows
+        print(f" - умножение растров TPI, крутизны склона и meadows...")
         with rasterio.open(output_tpi_reclassed) as src_tpi:
             tpi_data = src_tpi.read(1)
             profile = src_tpi.profile.copy()
@@ -2370,6 +2381,7 @@ def belt_calculate_forestation(
                             nodata, result)
         
         # Save the result
+        print(f" - сохранение растра forestation...")
         forestation_raster = os.path.join(fabdemdir, filename.replace('.tif', '_forestation.tif'))
         with rasterio.open(forestation_raster, 'w', **profile) as dst:
             dst.write(result.astype(profile['dtype']), 1)
@@ -2377,6 +2389,7 @@ def belt_calculate_forestation(
 
 
         # Открыть растр forestation_raster и векторизовать его в GeoDataFrame
+        print(f" - векторизация растра forestation...")
         try:
             with rasterio.open(forestation_raster) as src:
                 band = src.read(1)
@@ -2418,6 +2431,7 @@ def belt_calculate_forestation(
             raise RuntimeError(f"Failed to open or vectorize raster '{forestation_raster}': {e}")
         
         # Erase main_belt and gully_belt from forestation_gdf
+        print(f" - удаление областей ограничений из растра forestation...")
         for cut in [gully_belt, main_belt, limitation_full, road_OSM_cover_buf]:
             if cut is not None and not cut.empty:
                 # Ensure both GeoDataFrames have the same CRS
@@ -2433,6 +2447,7 @@ def belt_calculate_forestation(
         #     layer=f'{region_shortname}_forestation'
         #     )
         # pass
+        print(f" - добавление сплошного облесения из {filename} в кончный результат...")
         if forestation_gdf is not None and not forestation_gdf.empty:
             if i == 0 or final_gdf is None:
                 final_gdf = forestation_gdf               
@@ -2440,14 +2455,16 @@ def belt_calculate_forestation(
                 final_gdf = pd.concat([final_gdf, forestation_gdf], ignore_index=True)
         
         # удалить текущие растры
+        print(f" - удаление времееных растров для {filename}...")
         for fl in [ 
             input_file,
-            # output_tpi,
-            # output_tpi_reclassed,
+            output_file_lzw,
+            output_tpi,
+            output_tpi_reclassed,
             output_slope,
             output_slope_reclassed,
             meadows_reprojected,
-            # forestation_raster,
+            forestation_raster,
         ]:
             try:
                 os.remove(fl)
@@ -2455,6 +2472,7 @@ def belt_calculate_forestation(
                 print(err)
     
     if final_gdf is not None and not final_gdf.empty:
+        print(f" - сглаживание, объединение и фильтрация конечного результата...")
         minx, miny, maxx, maxy = final_gdf.total_bounds
         smoothing_crs = crs.CRS.from_proj4(
             f"+proj=laea +lat_0={(miny + maxy) / 2} +lon_0={(minx + maxx) / 2} " \
@@ -2466,10 +2484,10 @@ def belt_calculate_forestation(
         final_gdf = final_gdf.explode()
         # final_gdf["geometry"] = final_gdf.buffer(-10)
         final_gdf["geometry"] = final_gdf["geometry"].simplify(tolerance=0.1, preserve_topology=True)
-        final_gdf.to_file(
-                os.path.join(current_dir, 'result', f'{region_shortname}_limitations.gpkg'),
-                layer=f'{region_shortname}_forestation_beforeSmooth'
-                )
+        # final_gdf.to_file(
+        #         os.path.join(current_dir, 'result', f'{region_shortname}_limitations.gpkg'),
+        #         layer=f'{region_shortname}_forestation_beforeSmooth'
+        #         )
         final_gdf["geometry"] = final_gdf["geometry"].apply(lambda geom: gaussian_smooth(geom, sigma=1))
         final_gdf = final_gdf.to_crs(4326)
         
@@ -2487,11 +2505,12 @@ def belt_calculate_forestation(
                 areas_ha.append(0.0)
         final_gdf['area_ha'] = pd.to_numeric(areas_ha, errors='coerce')
         final_gdf = final_gdf[final_gdf ['area_ha'] > 1].copy()
-            
+        print(f" - сохранение конечного результата в {region_shortname}_limitations.gpkg/{region_shortname}_forestation...")
         final_gdf.to_file(
             os.path.join(current_dir, 'result', f'{region_shortname}_limitations.gpkg'),
             layer=f'{region_shortname}_forestation'
         )
+    print(f"#######{region} - РАСЧЕТ ЗОН СПЛОШНОГО ОБЛЕСЕНИЯ ВЫПОЛНЕН#######")
     return final_gdf
 
 
@@ -3315,9 +3334,9 @@ if __name__ == '__main__':
         meadows_raster='lulc/lulc_meadows.tif',
         tpi_threshold=-2,
         tpi_window_size_m=1000,
-        slope_threshold=12,
-        use_wbt=False  # whitebox_workflows produces corrupted output
+        slope_threshold=12
     )
+    pass
 
     # belt_calculate_secondary_belt(
     #     postgres_info='.secret/.gdcdb',
