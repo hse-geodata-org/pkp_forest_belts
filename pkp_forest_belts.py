@@ -3023,7 +3023,9 @@ def belt_calculate_road_belt(
         geom_field=road_buffers_geom_name
     )
     tertiary_unclassified_45m_buf = tertiary_unclassified_roads.copy().set_geometry(tertiary_unclassified_45m_buf_geom)
-    
+    tertiary_unclassified_45m_buf = tertiary_unclassified_45m_buf.dissolve()
+    tertiary_unclassified_45m_buf = tertiary_unclassified_45m_buf.explode()
+
     tertiary_unclassified_30m_buf_geom = calculate_geod_buffers(
         i_gdf=tertiary_unclassified_roads,
         buffer_crs=road_buffer_crs,
@@ -3032,21 +3034,24 @@ def belt_calculate_road_belt(
         geom_field=road_buffers_geom_name
     )
     tertiary_unclassified_30m_buf = tertiary_unclassified_roads.copy().set_geometry(tertiary_unclassified_30m_buf_geom)
+    tertiary_unclassified_30m_buf = tertiary_unclassified_30m_buf.dissolve()
+    tertiary_unclassified_30m_buf = tertiary_unclassified_30m_buf.explode()
 
-    # tertiary_unclassified_45m_buf = tertiary_unclassified_45m_buf.overlay(tertiary_unclassified_30m_buf, how='difference')
-    # tertiary_unclassified_30m_buf = tertiary_unclassified_30m_buf.overlay(tertiary_unclassified_roads, how='difference')
-    tertiary_unclassified_45m_buf[road_buffers_geom_name] = [
-        geom_45.difference(geom_30) for geom_45, geom_30 in zip(
-            tertiary_unclassified_45m_buf.geometry,
-            tertiary_unclassified_30m_buf.geometry
-        )
-    ]
-    tertiary_unclassified_30m_buf[road_buffers_geom_name] = [
-        geom_30.difference(geom_0) for geom_30, geom_0 in zip(
-            tertiary_unclassified_30m_buf.geometry,
-            tertiary_unclassified_roads.geometry
-        )
-    ]
+    tertiary_unclassified_45m_buf = tertiary_unclassified_45m_buf.overlay(tertiary_unclassified_30m_buf, how='difference')
+    tertiary_unclassified_30m_buf = tertiary_unclassified_30m_buf.overlay(tertiary_unclassified_roads, how='difference')
+    
+    # tertiary_unclassified_45m_buf[road_buffers_geom_name] = [
+    #     geom_45.difference(geom_30) for geom_45, geom_30 in zip(
+    #         tertiary_unclassified_45m_buf.geometry,
+    #         tertiary_unclassified_30m_buf.geometry
+    #     )
+    # ]
+    # tertiary_unclassified_30m_buf[road_buffers_geom_name] = [
+    #     geom_30.difference(geom_0) for geom_30, geom_0 in zip(
+    #         tertiary_unclassified_30m_buf.geometry,
+    #         tertiary_unclassified_roads.geometry
+    #     )
+    # ]`
     tertiary_unclassified_45m_buf['distance'] = 45
     tertiary_unclassified_30m_buf['distance'] = 30
 
@@ -3064,6 +3069,8 @@ def belt_calculate_road_belt(
         geom_field=road_buffers_geom_name
     )
     tertiary_link_30m_buf = tertiary_link_roads.copy().set_geometry(tertiary_link_30m_buf_geom)
+    tertiary_link_30m_buf = tertiary_link_30m_buf.dissolve()
+    tertiary_link_30m_buf = tertiary_link_30m_buf.explode()
     tertiary_link_30m_buf['distance'] = 30
     
     tertiary_link_55m_buf_geom = calculate_geod_buffers(
@@ -3074,20 +3081,25 @@ def belt_calculate_road_belt(
         geom_field=road_buffers_geom_name
     )
     tertiary_link_55m_buf = tertiary_link_roads.copy().set_geometry(tertiary_link_55m_buf_geom)
+    tertiary_link_55m_buf = tertiary_link_55m_buf.dissolve()
+    tertiary_link_55m_buf = tertiary_link_55m_buf.explode()
     tertiary_link_55m_buf['distance'] = 55
 
-    tertiary_link_55m_buf[road_buffers_geom_name] = [
-        geom_55.difference(geom_30) for geom_55, geom_30 in zip(
-            tertiary_link_55m_buf.geometry,
-            tertiary_link_30m_buf.geometry
-        )
-    ]
-    tertiary_link_30m_buf[road_buffers_geom_name] = [
-        geom_30.difference(geom_0) for geom_30, geom_0 in zip(
-            tertiary_link_30m_buf.geometry,
-            tertiary_link_roads.geometry
-        )
-    ]
+    tertiary_link_55m_buf = tertiary_link_55m_buf.overlay(tertiary_link_30m_buf, how='difference')
+    tertiary_link_30m_buf = tertiary_link_30m_buf.overlay(tertiary_link_roads, how='difference')
+
+    # tertiary_link_55m_buf[road_buffers_geom_name] = [
+    #     geom_55.difference(geom_30) for geom_55, geom_30 in zip(
+    #         tertiary_link_55m_buf.geometry,
+    #         tertiary_link_30m_buf.geometry
+    #     )
+    # ]
+    # tertiary_link_30m_buf[road_buffers_geom_name] = [
+    #     geom_30.difference(geom_0) for geom_30, geom_0 in zip(
+    #         tertiary_link_30m_buf.geometry,
+    #         tertiary_link_roads.geometry
+    #     )
+    # ]
 
     tertiary_link_30_55 = pd.concat([tertiary_link_30m_buf, tertiary_link_55m_buf], ignore_index=True)
     # tertiary_link_30_55 = tertiary_link_30_55.dissolve(by='distance', dropna=False)
@@ -3131,7 +3143,8 @@ def belt_calculate_road_belt(
     # также исключаем проектирование на застроенных территориях (полосы могут попасть в промышленные зоны, например) – стираем все, что попало под вектор build из LULC
     if build_gdf is None:
         raise ValueError("build_gdf is None")
-    road_belt_prepare = road_belt_prepare.overlay(build_gdf, how='difference')
+    if road_belt_prepare is not None and not road_belt_prepare.empty:        
+        road_belt_prepare = road_belt_prepare.overlay(build_gdf, how='difference')
 
     road_belt_prepare = road_belt_prepare.dissolve(by=['distance'], dropna=False)
     # составной в простые
@@ -3610,7 +3623,7 @@ if __name__ == '__main__':
         postgres_info='.secret/.gdcdb',
         region='Липецкая область', 
         regions_table='admin.hse_russia_regions',
-        region_buf_size=5000,
+        region_buf_size=0,
         road_table='osm.gis_osm_roads_free',
         road_buf_size_rule={
             "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
