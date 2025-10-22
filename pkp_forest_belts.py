@@ -23,7 +23,7 @@ from scipy.ndimage import gaussian_filter1d
 from centerline.geometry import Centerline
 import networkx as nx
 import whitebox_workflows as wbt
-# import whitebox as wb
+import whitebox as wb
 
 # Сложности https://github.com/astral-sh/uv/issues/11466
 from osgeo import gdal
@@ -2060,10 +2060,10 @@ def belt_calculate_forestation(
     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
     tpi_threshold=-2,
-    tpi_window_size_m=1000,
+    tpi_window_size_m=2000,
     slope_threshold=12,
     meadows_raster='lulc/lulc_meadows.tif',
-    use_wbt=True  # whitebox_workflows produces corrupted output (left side only), use GDAL instead
+    use_wbt=True
 ):
     print(f"#######{region} - РАСЧЕТ ЗОН СПЛОШНОГО ОБЛЕСЕНИЯ#######")
     print(" - загрузка разграфки FABDEM на территорию региона...")
@@ -2125,7 +2125,7 @@ def belt_calculate_forestation(
         input_file = os.path.join(fabdemdir, filename)
         input_dem = gdal.Open(input_file)
         ##################по Fabdem рассчитать индекс TPI#################
-        print(f" - расчет TPI для {filename}...")
+        
         output_tpi = os.path.join(fabdemdir, filename.replace('.tif', '_tpi.tif'))
         if input_dem is None:
             print(f"Error: Could not open {os.path.join(fabdemdir, filename)}")
@@ -2153,24 +2153,32 @@ def belt_calculate_forestation(
         
         # Close GDAL dataset before rasterio opens it
         input_dem = None
+
+        # Save a copy of input_file using 'COMPRESS=LZW' and 'TILED=YES'
+        print(f" - сохраняю копию {filename} со сжатием LZW...")
+        output_file_lzw = os.path.join(fabdemdir, filename.replace('.tif', '_lzw.tif'))
         
+        with rasterio.open(input_file) as src:
+            lzw_profile = src.profile.copy()
+            lzw_profile.update({'compress': 'lzw', 'tiled': True})
+            with rasterio.open(output_file_lzw, 'w', **lzw_profile) as dst:
+                dst.write(src.read(1), 1)
+        print(f" - расчет TPI для {filename}...")
         # if not use_wbt:
-        if True:
+        if not use_wbt:
             calculate_tpi_custom_window(input_file, output_tpi, window_size=tpi_window_size_odd)
         else:
-            # # Use WhiteboxTools for TPI calculation
-            # # wbt_instance = wbt.WbEnvironment()
-            # wbt_instance = wb.WhiteboxTools()
-            # wbt_instance.verbose = False
-            
-            # # Calculate TPI using WhiteboxTools
-            # # filterx and filtery define the window size (e.g., 11 = 11x11 window)
-            # wbt_instance.dev_from_mean_elev(
-            #     dem=input_file,
-            #     output=output_tpi,
-            #     filterx=tpi_window_size_odd,
-            #     filtery=tpi_window_size_odd
-            # )
+            # Use WhiteboxTools for TPI calculation
+            wbt_instance = wb.WhiteboxTools()
+            wbt_instance.verbose = False            
+            # Calculate TPI using WhiteboxTools
+            # filterx and filtery define the window size (e.g., 11 = 11x11 window)
+            wbt_instance.dev_from_mean_elev(
+                dem=output_file_lzw,
+                output=output_tpi,
+                filterx=tpi_window_size_odd,
+                filtery=tpi_window_size_odd
+            )
             pass
         
         # Reclass TPI: values < threshold -> nodata, others -> 1
@@ -2221,18 +2229,6 @@ def belt_calculate_forestation(
             # Write rescaled TPI file
             with rasterio.open(output_tpi_reclassed, 'w', **profile) as dst:
                 dst.write(reclassed_resampled.astype(profile['dtype']), 1)
-        
-        # Save a copy of input_file using 'COMPRESS=LZW' and 'TILED=YES'
-        print(f" - сохраняю копию {filename} со сжатием LZW...")
-        output_file_lzw = os.path.join(fabdemdir, filename.replace('.tif', '_lzw.tif'))
-        
-        with rasterio.open(input_file) as src:
-            lzw_profile = src.profile.copy()
-            lzw_profile.update({'compress': 'lzw', 'tiled': True})
-            with rasterio.open(output_file_lzw, 'w', **lzw_profile) as dst:
-                dst.write(src.read(1), 1)
-        
-        
         
         # Calculate slope
         print(f" - расчет крутизны склона для {filename}...")
@@ -2388,7 +2384,6 @@ def belt_calculate_forestation(
             dst.write(result.astype(profile['dtype']), 1)
         pass
 
-
         # Открыть растр forestation_raster и векторизовать его в GeoDataFrame
         print(f" - векторизация растра forestation...")
         try:
@@ -2399,7 +2394,6 @@ def belt_calculate_forestation(
                     mask = band != src.nodata
                 else:
                     mask = np.ones(band.shape, dtype=bool)
-
                 shapes_iter = rasterio.features.shapes(band, mask=mask, transform=src.transform)
                 records = []
                 for geom, value in shapes_iter:
@@ -2457,22 +2451,22 @@ def belt_calculate_forestation(
         
         # удалить текущие растры
         print(f" - удаление временных растров для {filename}...")
-        if row['tile_name'] != 'N052E038':
-            pass
-            for fl in [ 
-                input_file,
-                output_file_lzw,
-                output_tpi,
-                output_tpi_reclassed,
-                output_slope,
-                output_slope_reclassed,
-                meadows_reprojected,
-                forestation_raster,
-            ]:
-                try:
-                    os.remove(fl)
-                except Exception as err:
-                    print(err)
+        # if row['tile_name'] != 'N052E038':
+        #     pass
+        for fl in [ 
+            input_file,
+            output_file_lzw,
+            output_tpi,
+            output_tpi_reclassed,
+            output_slope,
+            output_slope_reclassed,
+            meadows_reprojected,
+            forestation_raster,
+        ]:
+            try:
+                os.remove(fl)
+            except Exception as err:
+                print(err)
     
     if final_gdf is not None and not final_gdf.empty:
         print(f" - сглаживание, объединение и фильтрация конечного результата...")
@@ -2788,6 +2782,7 @@ def belt_calculate_road_belt(
     limitation: gpd.GeoDataFrame=None,
     build_gdf: gpd.GeoDataFrame=None
 ):
+    print("#########Начинаем расчет придорожных лесополос#########")
     region_shortname = get_region_shortname(region)
     if region_shortname is None:
         region_shortname = "region"
@@ -2806,6 +2801,7 @@ def belt_calculate_road_belt(
         )
     except:
         raise
+    print("  - Выборка дорог из базы...")
     try:
         sql = f"select * from {regions_table} where lower(region) = '{region.lower()}';"
         with engine.connect() as conn:
@@ -2831,6 +2827,7 @@ def belt_calculate_road_belt(
 
     # Calculate buffer size per road based on provided rules
     # Prefer 'fname' if available, otherwise use 'fclass'
+    print("  - Заполняем в road_OSM_cover поле width_buf по условию...")
     match_field = 'fclass'
     if match_field not in road_gdf.columns:
         raise RuntimeError(
@@ -2862,8 +2859,10 @@ def belt_calculate_road_belt(
         pass
 
     road_gdf = road_gdf[road_gdf['buf_size'] > 0]
+
     # Build per-feature buffers using buf_size field
     road_buffers_geom_name = road_gdf.geometry.name
+    print("  - Строим площадной слой дорожного полотна road_OSM_cover_polygon...")
     road_buffers = calculate_geod_buffers(
         i_gdf=road_gdf,
         buffer_crs=road_buffer_crs,
@@ -2877,6 +2876,7 @@ def belt_calculate_road_belt(
 
     # от слоя road_OSM_cover_polygon строим множественный буфер
     # 1) tertiary_unclassified
+    print("  - от слоя road_OSM_cover_polygon строим множественный буфер...")
     tertiary_unclassified_roads = road_OSM_cover_polygon[road_OSM_cover_polygon['fclass'].isin(['tertiary', 'unclassified'])]
     tertiary_unclassified_45m_buf_geom = calculate_geod_buffers(
         i_gdf=tertiary_unclassified_roads,
@@ -2981,13 +2981,15 @@ def belt_calculate_road_belt(
     # pass
 
 
-    # удаляем наложения Стирание, входные объекты - слой (30,45), стриаюзщие слой с 30,55
+    # удаляем наложения Стирание, входные объекты - слой (30,45), стираемый слой с 30,55
+    print("  - удаляем наложения Стирание, входные объекты - слой (30,45), стираемый слой с (30,55)...")
     tertiary_unclassified_30_45 = tertiary_unclassified_30_45.overlay(tertiary_link_30_55, how='difference')
-
+    print("  - объединяем 2 слоя буферов (Слияние) (исходные 30,55 + обрезанные 30,25)...")
     # объединяем 2 слоя буферов (Слияние) (исходные 30,55 + обрезанные 30,25), не настраиваем поля слияния, сохраняем в road_belt_prepare
     road_belt_prepare = pd.concat([tertiary_unclassified_30_45, tertiary_link_30_55], ignore_index=True)
 
     # удаляем расстояние на траве (30 м) (выборка по distance = 30)
+    print("  - удаляем расстояние на траве (30 м) (выборка по distance = 30)...")
     road_belt_prepare = road_belt_prepare[road_belt_prepare['distance'] != 30]
 
     # road_belt_prepare.to_file(
@@ -2997,13 +2999,15 @@ def belt_calculate_road_belt(
     # )
     # pass
 
-    # стереть участки, попадающие в ограничения. стираем последовательно слоями forest_50m и limitation 
+    # стереть участки, попадающие в ограничения. стираем последовательно слоями forest_50m и limitation
+    print("  - стереть участки, попадающие в ограничения...") 
     if forest_50m is None or limitation is None:
         raise ValueError("forest_50m or limitation is None")
     road_belt_prepare = road_belt_prepare.overlay(forest_50m, how='difference')
     road_belt_prepare = road_belt_prepare.overlay(limitation, how='difference')
 
     # также исключаем проектирование на застроенных территориях (полосы могут попасть в промышленные зоны, например) – стираем все, что попало под вектор build из LULC
+    print("  - исключаем проектирование на застроенных территориях...")
     if build_gdf is None:
         raise ValueError("build_gdf is None")
     if road_belt_prepare is not None and not road_belt_prepare.empty:        
@@ -3011,9 +3015,11 @@ def belt_calculate_road_belt(
 
     road_belt_prepare = road_belt_prepare.dissolve(by=['distance'], dropna=False)
     # составной в простые
+    print("  - составной в простые...")
     road_belt_prepare = road_belt_prepare.explode()
 
     # Calculate geodesic area in hectares
+    print("  - удаляем участки с площадью меньше 0.2 га...")
     geod = Geod(ellps='WGS84')
     areas_ha = []
     for geom in road_belt_prepare.geometry:
@@ -3026,12 +3032,15 @@ def belt_calculate_road_belt(
 
     road_belt_prepare = road_belt_prepare[road_belt_prepare['area_ha'] > 0.2]
     
+    print(f"  - сохраняем итоговый слой {region_shortname}_road_belt_prepare...")
     if not road_belt_prepare.empty:
         road_belt_prepare.to_file(
             f"result/{region_shortname}_limitations.gpkg", 
             layer=f"{region_shortname}_road_belt_prepare"
-        )    
+        )
+        print("#########Конец расчета придорожных лесополос#########")
         return road_belt_prepare
+    print("#########ОШИБКА расчета придорожных лесополос - пустой результат#########")
     return None
 
 
@@ -3619,24 +3628,24 @@ if __name__ == '__main__':
     #     arable_gdf=arable_gdf
     # )
 
-    # forestation = belt_calculate_forestation(
-    #     region='Липецкая область',
-    #     main_belt=main_belt, 
-    #     gully_belt=gully_belt, 
-    #     limitation=limitation_all,
-    #     road_OSM_cover_buf=road_OSM_cover_buf,
-    #     postgres_info='.secret/.gdcdb',
-    #     regions_table='admin.hse_russia_regions', 
-    #     region_buf_size=0,
-    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-    #     meadows_raster='lulc/lulc_meadows.tif',
-    #     tpi_threshold=-2,
-    #     tpi_window_size_m=1000,
-    #     slope_threshold=12,
-    #     use_wbt=True
-    # )
-    # pass
+    forestation = belt_calculate_forestation(
+        region='Липецкая область',
+        main_belt=main_belt, 
+        gully_belt=gully_belt, 
+        limitation=limitation_all,
+        road_OSM_cover_buf=road_OSM_cover_buf,
+        postgres_info='.secret/.gdcdb',
+        regions_table='admin.hse_russia_regions', 
+        region_buf_size=0,
+        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+        meadows_raster='lulc/lulc_meadows.tif',
+        tpi_threshold=-2,
+        tpi_window_size_m=2000,
+        slope_threshold=12,
+        use_wbt=True
+    )
+    pass
 
     # belt_calculate_secondary_belt(
     #     postgres_info='.secret/.gdcdb',
@@ -3651,22 +3660,22 @@ if __name__ == '__main__':
     #     meadow_gdf=meadow_gdf
     # )
 
-    road_belt_prepare = belt_calculate_road_belt(
-        postgres_info='.secret/.gdcdb',
-        region='Липецкая область', 
-        regions_table='admin.hse_russia_regions',
-        region_buf_size=0,
-        road_table='osm.gis_osm_roads_free',
-        road_buf_size_rule={
-            "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
-            "fclass in ('secondary' , 'secondary_link')": 3.5,
-            "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
-        },
-        road_buffer_crs='utm',
-        forest_50m=forest_50m,
-        limitation=limitation_all,
-        build_gdf=build_gdf
-    )
+    # road_belt_prepare = belt_calculate_road_belt(
+    #     postgres_info='.secret/.gdcdb',
+    #     region='Липецкая область', 
+    #     regions_table='admin.hse_russia_regions',
+    #     region_buf_size=0,
+    #     road_table='osm.gis_osm_roads_free',
+    #     road_buf_size_rule={
+    #         "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+    #         "fclass in ('secondary' , 'secondary_link')": 3.5,
+    #         "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
+    #     },
+    #     road_buffer_crs='utm',
+    #     forest_50m=forest_50m,
+    #     limitation=limitation_all,
+    #     build_gdf=build_gdf
+    # )
 
     # pass
     # prepare_road_limitations(

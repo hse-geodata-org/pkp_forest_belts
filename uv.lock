@@ -507,6 +507,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "tqdm" },
     { name = "vgdb-general" },
+    { name = "whitebox" },
     { name = "whitebox-workflows" },
     { name = "yadisk" },
     { name = "yandexcloud" },
@@ -530,6 +531,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.43" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "vgdb-general", git = "https://github.com/stepanosokin/vgdb_general.git" },
+    { name = "whitebox", specifier = ">=2.3.6" },
     { name = "whitebox-workflows", specifier = ">=1.3.5" },
     { name = "yadisk", specifier = ">=3.4.0" },
     { name = "yandexcloud", specifier = ">=0.361.0" },
@@ -1112,6 +1114,18 @@ version = "0.1.0"
 source = { git = "https://github.com/stepanosokin/vgdb_general.git#b08cf1c601ec80f6cfb626fc4d296859b0d1b6aa" }
 dependencies = [
     { name = "requests" },
+]
+
+[[package]]
+name = "whitebox"
+version = "2.3.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/87/c628340efbf9f819a1e8b241967857b5cf69c197b998eae89a98c3c00dbd/whitebox-2.3.6.tar.gz", hash = "sha256:69571640a778253e27a05c63b08aed670457803798a0b8f233761eabcd39188b", size = 78177, upload-time = "2025-02-23T01:22:48.762Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/44/9bd2ca55e07ee3d63a0d3b46c77ca75e3089e38cc7260e46fc597a632a5a/whitebox-2.3.6-py2.py3-none-any.whl", hash = "sha256:16b780134cabb9b9d067078f42265da692963d466747cbe655f573fab0f3f60e", size = 74005, upload-time = "2025-02-23T01:22:46.745Z" },
 ]
 
 [[package]]
