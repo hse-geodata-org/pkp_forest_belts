@@ -1522,18 +1522,18 @@ def belt_calculate_forest_buffer(
 
 def belt_merge_limitation_full(
     region='Липецкая область',
-    limitations_all=None,   # geodataframe derived from prepare_limitations
+    limitation_all=None,   # geodataframe derived from prepare_limitations
     road_OSM_cover_buf=None,   # geodataframe derived from calculate_road_buffer
     forest_50m=None,   # geodataframe derived from calculate_forest_buffer
 ):
     print("calculating full limitations...")
     ###################объединение ограничений########################
-    if limitations_all is not None and road_OSM_cover_buf is not None and forest_50m is not None:
+    if limitation_all is not None and road_OSM_cover_buf is not None and forest_50m is not None:
         ############################################
         # Объединяем ограничения
         # Merge all limitations into a single GeoDataFrame
         src_gdfs = [
-            ("limitations_all", limitations_all),
+            ("limitation_all", limitation_all),
             ("road_OSM_cover_buf", road_OSM_cover_buf),
             ("forest_50m", forest_50m)
         ]
@@ -2052,7 +2052,7 @@ def belt_calculate_forestation(
     region='Липецкая область',
     main_belt=None,
     gully_belt=None,
-    limitation_full=None,
+    limitation=None,
     road_OSM_cover_buf=None,
     postgres_info='.secret/.gdcdb',
     regions_table='admin.hse_russia_regions', 
@@ -2063,7 +2063,7 @@ def belt_calculate_forestation(
     tpi_window_size_m=1000,
     slope_threshold=12,
     meadows_raster='lulc/lulc_meadows.tif',
-    use_wbt=False  # whitebox_workflows produces corrupted output (left side only), use GDAL instead
+    use_wbt=True  # whitebox_workflows produces corrupted output (left side only), use GDAL instead
 ):
     print(f"#######{region} - РАСЧЕТ ЗОН СПЛОШНОГО ОБЛЕСЕНИЯ#######")
     print(" - загрузка разграфки FABDEM на территорию региона...")
@@ -2225,9 +2225,10 @@ def belt_calculate_forestation(
         # Save a copy of input_file using 'COMPRESS=LZW' and 'TILED=YES'
         print(f" - сохраняю копию {filename} со сжатием LZW...")
         output_file_lzw = os.path.join(fabdemdir, filename.replace('.tif', '_lzw.tif'))
-        lzw_profile = profile.copy()
-        lzw_profile.update({'compress': 'lzw', 'tiled': True})
+        
         with rasterio.open(input_file) as src:
+            lzw_profile = src.profile.copy()
+            lzw_profile.update({'compress': 'lzw', 'tiled': True})
             with rasterio.open(output_file_lzw, 'w', **lzw_profile) as dst:
                 dst.write(src.read(1), 1)
         
@@ -2432,7 +2433,7 @@ def belt_calculate_forestation(
         
         # Erase main_belt and gully_belt from forestation_gdf
         print(f" - удаление областей ограничений из растра forestation...")
-        for cut in [gully_belt, main_belt, limitation_full, road_OSM_cover_buf]:
+        for cut in [gully_belt, main_belt, limitation, road_OSM_cover_buf]:
             if cut is not None and not cut.empty:
                 # Ensure both GeoDataFrames have the same CRS
                 if forestation_gdf.crs != cut.crs:
@@ -2455,21 +2456,23 @@ def belt_calculate_forestation(
                 final_gdf = pd.concat([final_gdf, forestation_gdf], ignore_index=True)
         
         # удалить текущие растры
-        print(f" - удаление времееных растров для {filename}...")
-        for fl in [ 
-            input_file,
-            output_file_lzw,
-            output_tpi,
-            output_tpi_reclassed,
-            output_slope,
-            output_slope_reclassed,
-            meadows_reprojected,
-            forestation_raster,
-        ]:
-            try:
-                os.remove(fl)
-            except Exception as err:
-                print(err)
+        print(f" - удаление временных растров для {filename}...")
+        if row['tile_name'] != 'N052E038':
+            pass
+            for fl in [ 
+                input_file,
+                output_file_lzw,
+                output_tpi,
+                output_tpi_reclassed,
+                output_slope,
+                output_slope_reclassed,
+                meadows_reprojected,
+                forestation_raster,
+            ]:
+                try:
+                    os.remove(fl)
+                except Exception as err:
+                    print(err)
     
     if final_gdf is not None and not final_gdf.empty:
         print(f" - сглаживание, объединение и фильтрация конечного результата...")
@@ -2654,139 +2657,6 @@ def belt_calculate_secondary_belt(
     return secondary_belt_gdf
 
 
-def calculate_forest_belt(
-    region: str='Липецкая область',
-    limitations_all: gpd.GeoDataFrame=None,   # geodataframe derived from prepare_limitations
-    lulc_link: str='lulc/S2LULC_10m_LAEA_48_202507081046.tif',
-    postgres_info: str='.secret/.gdcdb',
-    regions_table: str='admin.hse_russia_regions',
-    region_buf_size: int=5000,
-    road_table='osm.gis_osm_roads_free',
-    road_buf_size_rule={
-        "fclass  in  ('primary', 'primary_link')": 80,
-        "fclass in ('motorway' , 'motorway_link')": 80,
-        "fclass in ('secondary', 'secondary_link')": 70,
-        "fclass in ('tertiary', 'tertiary_link')": 70,
-        "fclass in ('trunk', 'trunk_link')": 70,
-        "fclass in ('unclassified')": 70,
-    },
-    fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-    fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-    meadows_raster='lulc/lulc_meadows.tif',
-    tpi_threshold=2,
-    tpi_window_size_m=1000,
-    slope_threshold=12
-):
-    print("start calculating forest belts")
-    region_shortname = get_region_shortname(region)
-    if region_shortname is None:
-        region_shortname = "region"
-    current_dir = os.getcwd()
-    os.environ["PROJ_LIB"] = os.path.join(current_dir, '.venv', 'Lib', 'site-packages', 'osgeo', 'data', 'proj')
-    lulcdir = os.path.join(current_dir, 'lulc')
-    if not os.path.isdir(lulcdir):
-        os.mkdir(lulcdir)
-    
-    ######################LULC######################
-    try:
-        lulc_gdfs = belt_vectorize_lulc(
-            region=region,
-            lulc_link=lulc_link
-            )
-        
-        water_gdf = lulc_gdfs.get('water_gdf')
-        forest_gdf = lulc_gdfs.get('forest_gdf')
-        meadow_gdf = lulc_gdfs.get('meadow_gdf')
-        arable_gdf = lulc_gdfs.get('arable_gdf')
-        build_gdf = lulc_gdfs.get('build_gdf')
-
-        for name, lulc_gdf in lulc_gdfs.items():
-            lulc_gdf.to_file(
-                os.path.join(current_dir, 'result', f'{region_shortname}_lulc.gpkg'), 
-                layer=f"{region_shortname}_lulc_{name.replace('_gdf', '')}"
-                )
-        pass
-    except Exception as e:
-        raise RuntimeError(f"Failed to build/save classified LULC GeoDataFrame: {e}")
-        
-        
-
-    ######################forest######################
-    forest_50m = belt_calculate_forest_buffer(
-        region=region,
-        forest_gdf=forest_gdf
-        )
-
-    ######################road_OSM_cover_buf######################
-    road_OSM_cover_buf = prepare_road_limitations(
-        postgres_info=postgres_info,
-        region=region, 
-        regions_table=regions_table,
-        region_buf_size=region_buf_size,
-        road_table=road_table,
-        road_buf_size_rule=road_buf_size_rule,
-        road_buffer_crs='utm',
-    )
-
-    ###################объединение ограничений########################
-    limitation_full = belt_merge_limitation_full(
-        region=region,
-        limitations_all=limitations_all,   # geodataframe derived from prepare_limitations
-        road_OSM_cover_buf=road_OSM_cover_buf,   # geodataframe derived from calculate_road_buffer
-        forest_50m=forest_50m   # geodataframe derived from calculate_forest_buffer
-    )
-
-    ###############arable###########################
-    arable_buffer = belt_calculate_arable_buffer(
-        region=region,
-        arable_gdf=arable_gdf,
-        arable_area_ha_threshold=10,
-        arable_buffer_distance=20
-    )
-
-    ####################буферные зоны######################
-    arable_buffer_eliminate = belt_calculate_arable_buffer_eliminate(
-        region=region,
-        arable_buffer=arable_buffer,
-        meadow_gdf=meadow_gdf,
-        limitation_full=limitation_full
-    )
-
-    ####################централины######################
-    _, belt_line = belt_calculate_centerlines(
-        region=region,
-        polygons_gdf=arable_buffer_eliminate,
-        segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
-        min_branch_length_m = 100.0   # prune tiny spurs
-    )
-
-    ####РАЗДЕЛЕНИЕ ЛЕСОПОЛОС НА ПРИБАЛОЧНЫЕ И ПОЛЕЗАЩИТНЫЕ###
-    main_belt, gully_belt = belt_classify_main_gulch(
-        region=region,
-        belt_line=belt_line,
-        arable_gdf=arable_gdf
-    )
-
-    ###################СПЛОШНОЕ ОБЛЕСЕНИЕ####################
-    forestation = belt_calculate_forestation(
-        region=region,
-        main_belt=main_belt, 
-        gully_belt=gully_belt, 
-        limitation_full=limitation_full,
-        postgres_info=postgres_info,
-        regions_table=regions_table, 
-        region_buf_size=region_buf_size,
-        fabdem_tiles_table=fabdem_tiles_table,
-        fabdem_zip_path=fabdem_zip_path,
-        meadows_raster=meadows_raster,
-        tpi_threshold=tpi_threshold,
-        tpi_window_size_m=tpi_window_size_m,
-        slope_threshold=slope_threshold
-    )
-
-    return main_belt, gully_belt, forestation
-
-
 def prepare_road_limitations(
     postgres_info='.secret/.gdcdb',
     region='Липецкая область', 
@@ -2901,13 +2771,6 @@ def prepare_road_limitations(
     return None
 
 
-# def belt_calculate_road_belt(
-#     region: str='Липецкая область',
-    
-# ):
-#     pass
-
-
 def belt_calculate_road_belt(
     postgres_info='.secret/.gdcdb',
     region='Липецкая область', 
@@ -2922,7 +2785,7 @@ def belt_calculate_road_belt(
     },
     road_buffer_crs='utm',
     forest_50m: gpd.GeoDataFrame=None,
-    limitation_full: gpd.GeoDataFrame=None,
+    limitation: gpd.GeoDataFrame=None,
     build_gdf: gpd.GeoDataFrame=None
 ):
     region_shortname = get_region_shortname(region)
@@ -3135,10 +2998,10 @@ def belt_calculate_road_belt(
     # pass
 
     # стереть участки, попадающие в ограничения. стираем последовательно слоями forest_50m и limitation 
-    if forest_50m is None or limitation_full is None:
-        raise ValueError("forest_50m or limitation_full is None")
+    if forest_50m is None or limitation is None:
+        raise ValueError("forest_50m or limitation is None")
     road_belt_prepare = road_belt_prepare.overlay(forest_50m, how='difference')
-    road_belt_prepare = road_belt_prepare.overlay(limitation_full, how='difference')
+    road_belt_prepare = road_belt_prepare.overlay(limitation, how='difference')
 
     # также исключаем проектирование на застроенных территориях (полосы могут попасть в промышленные зоны, например) – стираем все, что попало под вектор build из LULC
     if build_gdf is None:
@@ -3374,6 +3237,174 @@ def prepare_limitations(
         return merged_gdf
     return None
 
+
+def calculate_forest_belt(
+    region: str = 'Липецкая область',
+    limitation_all: gpd.GeoDataFrame = None,   # geodataframe derived from prepare_limitations
+    lulc_link: str = 'lulc/S2LULC_10m_LAEA_48_202507081046.tif',
+    postgres_info: str = '.secret/.gdcdb',
+    regions_table: str = 'admin.hse_russia_regions',
+    region_buf_size: int = 5000,
+    road_table: str = 'osm.gis_osm_roads_free',
+    road_buf_size_rule_lim: dict = {
+        "fclass  in  ('primary', 'primary_link')": 80,
+        "fclass in ('motorway' , 'motorway_link')": 80,
+        "fclass in ('secondary', 'secondary_link')": 70,
+        "fclass in ('tertiary', 'tertiary_link')": 70,
+        "fclass in ('trunk', 'trunk_link')": 70,
+        "fclass in ('unclassified')": 70,
+    },
+    fabdem_tiles_table: str = 'elevation.fabdem_v1_2_tiles',
+    fabdem_zip_path: str = r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+    meadows_raster: str = 'lulc/lulc_meadows.tif',
+    tpi_threshold: int = 2,
+    tpi_window_size_m: int = 1000,
+    slope_threshold: int = 12,
+    road_buf_size_rule_belt: dict = {
+            "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+            "fclass in ('secondary' , 'secondary_link')": 3.5,
+            "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
+        },
+):
+    print("start calculating forest belts")
+    region_shortname = get_region_shortname(region)
+    if region_shortname is None:
+        region_shortname = "region"
+    current_dir = os.getcwd()
+    os.environ["PROJ_LIB"] = os.path.join(current_dir, '.venv', 'Lib', 'site-packages', 'osgeo', 'data', 'proj')
+    lulcdir = os.path.join(current_dir, 'lulc')
+    if not os.path.isdir(lulcdir):
+        os.mkdir(lulcdir)
+    
+    ######################LULC######################
+    try:
+        lulc_gdfs = belt_vectorize_lulc(
+            region=region,
+            lulc_link=lulc_link
+            )
+        
+        water_gdf = lulc_gdfs.get('water_gdf')
+        forest_gdf = lulc_gdfs.get('forest_gdf')
+        meadow_gdf = lulc_gdfs.get('meadow_gdf')
+        arable_gdf = lulc_gdfs.get('arable_gdf')
+        build_gdf = lulc_gdfs.get('build_gdf')
+
+        for name, lulc_gdf in lulc_gdfs.items():
+            lulc_gdf.to_file(
+                os.path.join(current_dir, 'result', f'{region_shortname}_lulc.gpkg'), 
+                layer=f"{region_shortname}_lulc_{name.replace('_gdf', '')}"
+                )
+        pass
+    except Exception as e:
+        raise RuntimeError(f"Failed to build/save classified LULC GeoDataFrame: {e}")
+        
+        
+
+    ######################forest######################
+    forest_50m = belt_calculate_forest_buffer(
+        region=region,
+        forest_gdf=forest_gdf
+        )
+
+    ######################road_OSM_cover_buf######################
+    road_OSM_cover_buf = prepare_road_limitations(
+        postgres_info=postgres_info,
+        region=region, 
+        regions_table=regions_table,
+        region_buf_size=region_buf_size,
+        road_table=road_table,
+        road_buf_size_rule=road_buf_size_rule_lim,
+        road_buffer_crs='utm',
+    )
+
+    ###################объединение ограничений########################
+    limitation_full = belt_merge_limitation_full(
+        region=region,
+        limitations_all=limitation_all,   # geodataframe derived from prepare_limitations
+        road_OSM_cover_buf=road_OSM_cover_buf,   # geodataframe derived from calculate_road_buffer
+        forest_50m=forest_50m   # geodataframe derived from calculate_forest_buffer
+    )
+
+    ###############arable###########################
+    arable_buffer = belt_calculate_arable_buffer(
+        region=region,
+        arable_gdf=arable_gdf,
+        arable_area_ha_threshold=10,
+        arable_buffer_distance=20
+    )
+
+    ####################буферные зоны######################
+    arable_buffer_eliminate = belt_calculate_arable_buffer_eliminate(
+        region=region,
+        arable_buffer=arable_buffer,
+        meadow_gdf=meadow_gdf,
+        limitation_full=limitation_full
+    )
+
+    ####################централины######################
+    _, belt_line = belt_calculate_centerlines(
+        region=region,
+        polygons_gdf=arable_buffer_eliminate,
+        segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
+        min_branch_length_m = 100.0   # prune tiny spurs
+    )
+
+    ####РАЗДЕЛЕНИЕ ЛЕСОПОЛОС НА ПРИБАЛОЧНЫЕ И ПОЛЕЗАЩИТНЫЕ###
+    main_belt, gully_belt = belt_classify_main_gulch(
+        region=region,
+        belt_line=belt_line,
+        arable_gdf=arable_gdf
+    )
+
+    ###################СПЛОШНОЕ ОБЛЕСЕНИЕ####################
+    forestation = belt_calculate_forestation(
+        region=region,
+        main_belt=main_belt, 
+        gully_belt=gully_belt, 
+        limitation=limitation_all,
+        road_OSM_cover_buf=road_OSM_cover_buf,
+        postgres_info=postgres_info,
+        regions_table=regions_table, 
+        region_buf_size=region_buf_size,
+        fabdem_tiles_table=fabdem_tiles_table,
+        fabdem_zip_path=fabdem_zip_path,
+        meadows_raster=meadows_raster,
+        tpi_threshold=tpi_threshold,
+        tpi_window_size_m=tpi_window_size_m,
+        slope_threshold=slope_threshold,
+        use_wbt=True
+    )
+
+    ###################ВТОРОСТЕПЕННЫЕ ЛЕСОПОЛОСЫ####################
+    secondary_belt = belt_calculate_secondary_belt(
+        postgres_info=postgres_info,
+        region=region,
+        regions_table=regions_table,
+        region_buf_size=region_buf_size,
+        road_table=road_table,
+        road_one_side_buf_size_m=6,
+        limitation_full=limitation_full,
+        main_belt=main_belt,
+        gully_belt=gully_belt,
+        meadow_gdf=meadow_gdf
+    )
+
+    ###################ПРИДОРОЖНЫЕ ЛЕСОПОЛОСЫ####################
+    road_belt_prepare = belt_calculate_road_belt(
+        postgres_info=postgres_info,
+        region=region, 
+        regions_table=regions_table,
+        region_buf_size=region_buf_size,
+        road_table=road_table,
+        road_buf_size_rule=road_buf_size_rule_belt,
+        road_buffer_crs='utm',
+        forest_50m=forest_50m,
+        limitation=limitation_all,
+        build_gdf=build_gdf
+    )
+
+    return main_belt, gully_belt, forestation, secondary_belt, road_belt_prepare
+
     
 if __name__ == '__main__':
 
@@ -3418,7 +3449,7 @@ if __name__ == '__main__':
     #     region='Липецкая область'
     # )
         
-    # limitations_all = prepare_limitations(
+    # limitation_all = prepare_limitations(
     #     region='Липецкая область',
     #     postgres_info='.secret/.gdcdb',
     #     regions_table='admin.hse_russia_regions',
@@ -3451,14 +3482,14 @@ if __name__ == '__main__':
         'result/Lipetskaya_lulc.gpkg', 
         layer='Lipetskaya_lulc_build'
         )
-    # limitations_all = gpd.read_file(
-    #     'result/Lipetskaya_limitations.gpkg', 
-    #     layer='Lipetskaya_all_limitations'
-    #     )
-    # road_OSM_cover_buf = gpd.read_file(
-    #     'result/Lipetskaya_limitations.gpkg', 
-    #     layer='Lipetskaya_road_OSM_cover_buf'
-    #     )
+    limitation_all = gpd.read_file(
+        'result/Lipetskaya_limitations.gpkg', 
+        layer='Lipetskaya_all_limitations'
+        )
+    road_OSM_cover_buf = gpd.read_file(
+        'result/Lipetskaya_limitations.gpkg', 
+        layer='Lipetskaya_road_OSM_cover_buf'
+        )
     forest_50m = gpd.read_file(
         'result/Lipetskaya_limitations.gpkg', 
         layer='Lipetskaya_forest_50m'
@@ -3551,7 +3582,7 @@ if __name__ == '__main__':
 
     # limitation_full = belt_merge_limitation_full(
     #     region='Липецкая область',
-    #     limitations_all=limitations_all,   # geodataframe derived from prepare_limitations
+    #     limitation_all=limitation_all,   # geodataframe derived from prepare_limitations
     #     road_OSM_cover_buf=road_OSM_cover_buf,   # geodataframe derived from calculate_road_buffer
     #     forest_50m=forest_50m   # geodataframe derived from calculate_forest_buffer
     # )
@@ -3592,7 +3623,7 @@ if __name__ == '__main__':
     #     region='Липецкая область',
     #     main_belt=main_belt, 
     #     gully_belt=gully_belt, 
-    #     limitation_full=limitation_full,
+    #     limitation=limitation_all,
     #     road_OSM_cover_buf=road_OSM_cover_buf,
     #     postgres_info='.secret/.gdcdb',
     #     regions_table='admin.hse_russia_regions', 
@@ -3602,7 +3633,8 @@ if __name__ == '__main__':
     #     meadows_raster='lulc/lulc_meadows.tif',
     #     tpi_threshold=-2,
     #     tpi_window_size_m=1000,
-    #     slope_threshold=12
+    #     slope_threshold=12,
+    #     use_wbt=True
     # )
     # pass
 
@@ -3632,11 +3664,11 @@ if __name__ == '__main__':
         },
         road_buffer_crs='utm',
         forest_50m=forest_50m,
-        limitation_full=limitation_full,
+        limitation=limitation_all,
         build_gdf=build_gdf
     )
 
-    pass
+    # pass
     # prepare_road_limitations(
     #     region='Липецкая область'
     # )
@@ -3649,7 +3681,7 @@ if __name__ == '__main__':
     #     regions_table='admin.hse_russia_regions',
     #     region_buf_size=5000,
     #     road_table='osm.gis_osm_roads_free',
-    #     road_buf_size_rule={
+    #     road_buf_size_rule_lim={
     #         "fclass  in  ('primary', 'primary_link')": 80,
     #         "fclass in ('motorway' , 'motorway_link')": 80,
     #         "fclass in ('secondary', 'secondary_link')": 70,
