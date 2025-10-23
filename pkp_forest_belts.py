@@ -2165,7 +2165,7 @@ def belt_calculate_forestation(
                 dst.write(src.read(1), 1)
         print(f" - расчет TPI для {filename}...")
         # if not use_wbt:
-        if not use_wbt:
+        if True:
             calculate_tpi_custom_window(input_file, output_tpi, window_size=tpi_window_size_odd)
         else:
             # Use WhiteboxTools for TPI calculation
@@ -2451,22 +2451,22 @@ def belt_calculate_forestation(
         
         # удалить текущие растры
         print(f" - удаление временных растров для {filename}...")
-        # if row['tile_name'] != 'N052E038':
-        #     pass
-        for fl in [ 
-            input_file,
-            output_file_lzw,
-            output_tpi,
-            output_tpi_reclassed,
-            output_slope,
-            output_slope_reclassed,
-            meadows_reprojected,
-            forestation_raster,
-        ]:
-            try:
-                os.remove(fl)
-            except Exception as err:
-                print(err)
+        if row['tile_name'] != 'N052E038':
+            pass
+            for fl in [ 
+                input_file,
+                output_file_lzw,
+                output_tpi,
+                output_tpi_reclassed,
+                output_slope,
+                output_slope_reclassed,
+                meadows_reprojected,
+                forestation_raster,
+            ]:
+                try:
+                    os.remove(fl)
+                except Exception as err:
+                    print(err)
     
     if final_gdf is not None and not final_gdf.empty:
         print(f" - сглаживание, объединение и фильтрация конечного результата...")
