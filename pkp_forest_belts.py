@@ -3377,6 +3377,7 @@ def calculate_forest_belt(
     lulc_link: str = 'lulc/S2LULC_10m_LAEA_48_202507081046.tif',
     postgres_info: str = '.secret/.gdcdb',
     regions_table: str = 'admin.hse_russia_regions',
+    sber_index_table: str = 'sber.municipal_districts_newregion',
     region_buf_size: int = 5000,
     road_table: str = 'osm.gis_osm_roads_free',
     road_buf_size_rule_lim: dict = {
@@ -3536,7 +3537,19 @@ def calculate_forest_belt(
         build_gdf=build_gdf
     )
 
-    return main_belt, gully_belt, forestation, secondary_belt, road_belt
+    ################Итоговый слой лесополос 1################
+    forest_belt_nature = belt_forest_belt_nature(
+        postgres_info=postgres_info,
+        regions_table=sber_index_table,
+        region=region, 
+        main_belt_gdf=main_belt,
+        secondary_belt_gdf=secondary_belt,
+        gully_belt_gdf=gully_belt,
+        forestation_gdf=forestation,
+        road_belt_gdf=road_belt
+    )
+
+    return main_belt, gully_belt, forestation, secondary_belt, road_belt, forest_belt_nature
 
     
 if __name__ == '__main__':
@@ -3757,54 +3770,54 @@ if __name__ == '__main__':
     #     arable_gdf=arable_gdf
     # )
 
-    # forestation = belt_calculate_forestation(
-    #     region='Липецкая область',
-    #     main_belt=main_belt, 
-    #     gully_belt=gully_belt, 
-    #     limitation=limitation_all,
-    #     road_OSM_cover_buf=road_OSM_cover_buf,
-    #     postgres_info='.secret/.gdcdb',
-    #     regions_table='admin.hse_russia_regions', 
-    #     region_buf_size=0,
-    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-    #     meadows_raster='lulc/lulc_meadows.tif',
-    #     tpi_threshold=-2,
-    #     tpi_window_size_m=2000,
-    #     slope_threshold=12,
-    #     use_wbt=True
-    # )
-    # pass
+    forestation = belt_calculate_forestation(
+        region='Липецкая область',
+        main_belt=main_belt, 
+        gully_belt=gully_belt, 
+        limitation=limitation_all,
+        road_OSM_cover_buf=road_OSM_cover_buf,
+        postgres_info='.secret/.gdcdb',
+        regions_table='admin.hse_russia_regions', 
+        region_buf_size=0,
+        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+        meadows_raster='lulc/lulc_meadows.tif',
+        tpi_threshold=-2,
+        tpi_window_size_m=2000,
+        slope_threshold=12,
+        use_wbt=True
+    )
+    pass
 
-    # belt_calculate_secondary_belt(
-    #     postgres_info='.secret/.gdcdb',
-    #     region='Липецкая область',
-    #     regions_table='admin.hse_russia_regions',
-    #     region_buf_size=5000,
-    #     road_table='osm.gis_osm_roads_free',
-    #     road_one_side_buf_size_m=6,
-    #     limitation_full=limitation_full,
-    #     main_belt=main_belt,
-    #     gully_belt=gully_belt,
-    #     meadow_gdf=meadow_gdf
-    # )
+    belt_calculate_secondary_belt(
+        postgres_info='.secret/.gdcdb',
+        region='Липецкая область',
+        regions_table='admin.hse_russia_regions',
+        region_buf_size=5000,
+        road_table='osm.gis_osm_roads_free',
+        road_one_side_buf_size_m=6,
+        limitation_full=limitation_full,
+        main_belt=main_belt,
+        gully_belt=gully_belt,
+        meadow_gdf=meadow_gdf
+    )
 
-    # road_belt_prepare = belt_calculate_road_belt(
-    #     postgres_info='.secret/.gdcdb',
-    #     region='Липецкая область', 
-    #     regions_table='admin.hse_russia_regions',
-    #     region_buf_size=0,
-    #     road_table='osm.gis_osm_roads_free',
-    #     road_buf_size_rule={
-    #         "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
-    #         "fclass in ('secondary' , 'secondary_link')": 3.5,
-    #         "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
-    #     },
-    #     road_buffer_crs='utm',
-    #     forest_50m=forest_50m,
-    #     limitation=limitation_all,
-    #     build_gdf=build_gdf
-    # )
+    road_belt_prepare = belt_calculate_road_belt(
+        postgres_info='.secret/.gdcdb',
+        region='Липецкая область', 
+        regions_table='admin.hse_russia_regions',
+        region_buf_size=0,
+        road_table='osm.gis_osm_roads_free',
+        road_buf_size_rule={
+            "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+            "fclass in ('secondary' , 'secondary_link')": 3.5,
+            "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
+        },
+        road_buffer_crs='utm',
+        forest_50m=forest_50m,
+        limitation=limitation_all,
+        build_gdf=build_gdf
+    )
 
     forest_belt_nature = belt_forest_belt_nature(
         postgres_info='.secret/.gdcdb',
