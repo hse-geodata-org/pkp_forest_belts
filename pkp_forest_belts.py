@@ -36,6 +36,22 @@ import boto3
 from scipy.ndimage import uniform_filter
 
 
+# Connect nearby parts within each cluster
+def connect_cluster_parts(geom, max_dist=100, width=5):
+    if geom.geom_type == 'MultiPolygon' and len(geom.geoms) > 1:
+        parts = list(geom.geoms)
+        corridors = []
+        for i in range(len(parts)-1):
+            for j in range(i+1, len(parts)):
+                if parts[i].distance(parts[j]) <= max_dist:
+                    nearest = shapely.ops.nearest_points(parts[i], parts[j])
+                    corridor = shapely.geometry.LineString(nearest).buffer(width)
+                    corridors.append(corridor)
+        if corridors:
+            return shapely.ops.unary_union(parts + corridors)
+    return geom
+
+
 def calculate_tpi_custom_window(input_file, output_file, window_size=5):
     """
     Calculate TPI with custom window size
@@ -79,12 +95,51 @@ def calculate_tpi_custom_window(input_file, output_file, window_size=5):
 
 def gaussian_smooth(geom, sigma=2):
     if geom.geom_type == 'Polygon':
+        # Smooth exterior ring
         coords = np.array(geom.exterior.coords)
-        # Smooth x and y separately
         x_smooth = gaussian_filter1d(coords[:, 0], sigma=sigma, mode='wrap')
         y_smooth = gaussian_filter1d(coords[:, 1], sigma=sigma, mode='wrap')
-        smoothed_coords = np.column_stack([x_smooth, y_smooth])
-        return shapely.geometry.Polygon(smoothed_coords)
+        smoothed_exterior = np.column_stack([x_smooth, y_smooth])
+        
+        # Smooth interior rings (holes)
+        smoothed_interiors = []
+        for interior in geom.interiors:
+            hole_coords = np.array(interior.coords)
+            hole_x_smooth = gaussian_filter1d(hole_coords[:, 0], sigma=sigma, mode='wrap')
+            hole_y_smooth = gaussian_filter1d(hole_coords[:, 1], sigma=sigma, mode='wrap')
+            smoothed_hole = np.column_stack([hole_x_smooth, hole_y_smooth])
+            smoothed_interiors.append(smoothed_hole)
+        
+        # Create smoothed polygon
+        smoothed_poly = shapely.geometry.Polygon(smoothed_exterior, smoothed_interiors)
+        
+        # Check and fix topological errors
+        if not smoothed_poly.is_valid:
+            # Try to fix with make_valid
+            smoothed_poly = shapely.make_valid(smoothed_poly)
+            
+            # If result is MultiPolygon, take the largest part
+            if smoothed_poly.geom_type == 'MultiPolygon':
+                smoothed_poly = max(smoothed_poly.geoms, key=lambda p: p.area)
+            # If result is not a Polygon, return original geometry
+            elif smoothed_poly.geom_type != 'Polygon':
+                return geom
+        
+        # Additional check: ensure holes are inside exterior
+        if smoothed_poly.geom_type == 'Polygon' and len(smoothed_poly.interiors) > 0:
+            exterior_poly = shapely.geometry.Polygon(smoothed_poly.exterior)
+            valid_interiors = []
+            
+            for interior in smoothed_poly.interiors:
+                hole_poly = shapely.geometry.Polygon(interior)
+                # Keep hole only if it's completely within exterior
+                if exterior_poly.contains(hole_poly):
+                    valid_interiors.append(interior)
+            
+            # Reconstruct with only valid holes
+            smoothed_poly = shapely.geometry.Polygon(smoothed_poly.exterior, valid_interiors)
+        
+        return smoothed_poly
     elif geom.geom_type == 'MultiPolygon':
         smoothed_parts = [
             gaussian_smooth(poly, sigma) 
@@ -1734,8 +1789,27 @@ def belt_calculate_arable_buffer_eliminate(
     graph = coo_matrix((np.ones_like(rows), (rows, cols)), shape=(len(arable_buffer_aggregate), len(arable_buffer_aggregate)))
     _, labels = connected_components(graph)
     arable_buffer_aggregate["cluster_id"] = labels
+
+    # Аггрегация через соединение соседних частей мультиполигонов
+    #############################################################################
     arable_buffer_aggregate = arable_buffer_aggregate.dissolve(by="cluster_id")
+    arable_buffer_aggregate.geometry = arable_buffer_aggregate.geometry.apply(
+        lambda g: connect_cluster_parts(g, max_dist=30, width=2)
+    )
+    #############################################################################
+
+    # Аггрегация через буфер/дебуфер (устаревший метод)
+    # ############################################################################
+    # arable_buffer_aggregate_geometry = arable_buffer_aggregate.buffer((arabale_buffer_aggregate_distance_m / 2) + 0.1)
+    # arable_buffer_aggregate_geometry = shapely.make_valid(arable_buffer_aggregate_geometry)
+    # arable_buffer_aggregate.geometry = arable_buffer_aggregate_geometry
+    # # arable_buffer_aggregate.geometry = arable_buffer_aggregate.buffer(5)
+    # arable_buffer_aggregate = arable_buffer_aggregate.dissolve(by="cluster_id")
+    # arable_buffer_aggregate.geometry = arable_buffer_aggregate.buffer(-((arabale_buffer_aggregate_distance_m / 2) + 0.1))
+    # # arable_buffer_aggregate.geometry = arable_buffer_aggregate.buffer(-5)
     # arable_buffer_aggregate = arable_buffer_aggregate.explode()
+    # ############################################################################
+    
     arable_buffer_aggregate = arable_buffer_aggregate.to_crs(4326)
     
     print("  - calculating areas for arable_buffer_aggregate...")
@@ -3641,50 +3715,50 @@ if __name__ == '__main__':
     #     layer='Lipetskaya_forest_50m'
     #     )
     # arable_gdf = gpd.read_file(
-    #     'result/Lipetskaya_lulc.gpkg', 
+    #     'result/Lipetskaya_lulc_sample.gpkg', 
     #     layer='Lipetskaya_lulc_arable'
     #     )
-    # arable_buffer = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_arable_buffer'
-    #     )
-    # meadow_gdf = gpd.read_file(
-    #     'result/Lipetskaya_lulc.gpkg', 
-    #     layer='Lipetskaya_lulc_meadow'
-    #     )
-    # limitation_full = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_limitation_full'
-    #     )
+    arable_buffer = gpd.read_file(
+        'result/Lipetskaya_Limitations.gpkg', 
+        layer='Lipetskaya_arable_buffer'
+        )
+    meadow_gdf = gpd.read_file(
+        'result/Lipetskaya_lulc_sample.gpkg', 
+        layer='Lipetskaya_lulc_meadow'
+        )
+    limitation_full = gpd.read_file(
+        'result/Lipetskaya_Limitations.gpkg', 
+        layer='Lipetskaya_limitation_full'
+        )
     # arable_buffer_eliminate = gpd.read_file(
     #     'result/Lipetskaya_Limitations.gpkg', 
     #     layer='Lipetskaya_arable_buffer_eliminate'
     #     )
-    belt_line = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_belt_line'
-        )
+    # belt_line = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_belt_line'
+    #     )
 
-    main_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_main_belt'
-        )
-    gully_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_gully_belt'
-        )
-    forestation = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_forestation'
-        )
-    secondary_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_secondary_belt'
-        )
-    road_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_road_belt_prepare'
-        )
+    # main_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_main_belt'
+    #     )
+    # gully_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_gully_belt'
+    #     )
+    # forestation = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_forestation'
+    #     )
+    # secondary_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_secondary_belt'
+    #     )
+    # road_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_road_belt_prepare'
+    #     )
 
 
     region_shortname = get_region_shortname('Липецкая область')
@@ -3746,14 +3820,14 @@ if __name__ == '__main__':
     # )
     # pass
 
-    # arable_buffer_eliminate = belt_calculate_arable_buffer_eliminate(
-    #     region='Липецкая область',
-    #     arable_buffer=arable_buffer,
-    #     meadow_gdf=meadow_gdf,
-    #     limitation_full=limitation_full,
-    #     arable_hole_area_threshold_m=10000
-    # )
-    # pass
+    arable_buffer_eliminate = belt_calculate_arable_buffer_eliminate(
+        region='Липецкая область',
+        arable_buffer=arable_buffer,
+        meadow_gdf=meadow_gdf,
+        limitation_full=limitation_full,
+        arable_hole_area_threshold_m=10000
+    )
+    pass
 
     # _, belt_line = belt_calculate_centerlines(
     #     region='Липецкая область',
@@ -3770,66 +3844,66 @@ if __name__ == '__main__':
     #     arable_gdf=arable_gdf
     # )
 
-    forestation = belt_calculate_forestation(
-        region='Липецкая область',
-        main_belt=main_belt, 
-        gully_belt=gully_belt, 
-        limitation=limitation_all,
-        road_OSM_cover_buf=road_OSM_cover_buf,
-        postgres_info='.secret/.gdcdb',
-        regions_table='admin.hse_russia_regions', 
-        region_buf_size=0,
-        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-        meadows_raster='lulc/lulc_meadows.tif',
-        tpi_threshold=-2,
-        tpi_window_size_m=2000,
-        slope_threshold=12,
-        use_wbt=True
-    )
-    pass
+    # forestation = belt_calculate_forestation(
+    #     region='Липецкая область',
+    #     main_belt=main_belt, 
+    #     gully_belt=gully_belt, 
+    #     limitation=limitation_all,
+    #     road_OSM_cover_buf=road_OSM_cover_buf,
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='admin.hse_russia_regions', 
+    #     region_buf_size=0,
+    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+    #     meadows_raster='lulc/lulc_meadows.tif',
+    #     tpi_threshold=-2,
+    #     tpi_window_size_m=2000,
+    #     slope_threshold=12,
+    #     use_wbt=True
+    # )
+    # pass
 
-    belt_calculate_secondary_belt(
-        postgres_info='.secret/.gdcdb',
-        region='Липецкая область',
-        regions_table='admin.hse_russia_regions',
-        region_buf_size=5000,
-        road_table='osm.gis_osm_roads_free',
-        road_one_side_buf_size_m=6,
-        limitation_full=limitation_full,
-        main_belt=main_belt,
-        gully_belt=gully_belt,
-        meadow_gdf=meadow_gdf
-    )
+    # belt_calculate_secondary_belt(
+    #     postgres_info='.secret/.gdcdb',
+    #     region='Липецкая область',
+    #     regions_table='admin.hse_russia_regions',
+    #     region_buf_size=5000,
+    #     road_table='osm.gis_osm_roads_free',
+    #     road_one_side_buf_size_m=6,
+    #     limitation_full=limitation_full,
+    #     main_belt=main_belt,
+    #     gully_belt=gully_belt,
+    #     meadow_gdf=meadow_gdf
+    # )
 
-    road_belt_prepare = belt_calculate_road_belt(
-        postgres_info='.secret/.gdcdb',
-        region='Липецкая область', 
-        regions_table='admin.hse_russia_regions',
-        region_buf_size=0,
-        road_table='osm.gis_osm_roads_free',
-        road_buf_size_rule={
-            "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
-            "fclass in ('secondary' , 'secondary_link')": 3.5,
-            "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
-        },
-        road_buffer_crs='utm',
-        forest_50m=forest_50m,
-        limitation=limitation_all,
-        build_gdf=build_gdf
-    )
+    # road_belt_prepare = belt_calculate_road_belt(
+    #     postgres_info='.secret/.gdcdb',
+    #     region='Липецкая область', 
+    #     regions_table='admin.hse_russia_regions',
+    #     region_buf_size=0,
+    #     road_table='osm.gis_osm_roads_free',
+    #     road_buf_size_rule={
+    #         "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+    #         "fclass in ('secondary' , 'secondary_link')": 3.5,
+    #         "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
+    #     },
+    #     road_buffer_crs='utm',
+    #     forest_50m=forest_50m,
+    #     limitation=limitation_all,
+    #     build_gdf=build_gdf
+    # )
 
-    forest_belt_nature = belt_forest_belt_nature(
-        postgres_info='.secret/.gdcdb',
-        regions_table='sber.municipal_districts_newregion',
-        region='Липецкая область', 
-        main_belt_gdf=main_belt,
-        secondary_belt_gdf=secondary_belt,
-        gully_belt_gdf=gully_belt,
-        forestation_gdf=forestation,
-        road_belt_gdf=road_belt,
-        region_buf_size=5000,
-    )
+    # forest_belt_nature = belt_forest_belt_nature(
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='sber.municipal_districts_newregion',
+    #     region='Липецкая область', 
+    #     main_belt_gdf=main_belt,
+    #     secondary_belt_gdf=secondary_belt,
+    #     gully_belt_gdf=gully_belt,
+    #     forestation_gdf=forestation,
+    #     road_belt_gdf=road_belt,
+    #     region_buf_size=5000,
+    # )
 
     # pass
     # prepare_road_limitations(
