@@ -3554,7 +3554,8 @@ def calculate_forest_belt(
         region=region,
         polygons_gdf=arable_buffer_eliminate,
         segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
-        min_branch_length_m = 100.0   # prune tiny spurs
+        min_branch_length_m = 100.0,   # prune tiny spurs
+        iterations=20
     )
 
     ####РАЗДЕЛЕНИЕ ЛЕСОПОЛОС НА ПРИБАЛОЧНЫЕ И ПОЛЕЗАЩИТНЫЕ###
@@ -3668,6 +3669,11 @@ if __name__ == '__main__':
     # prepare_forest_limitations(
     #     region='Липецкая область'
     # )
+
+    # pass
+    # prepare_road_limitations(
+    #     region='Липецкая область'
+    # )
         
     # limitation_all = prepare_limitations(
     #     region='Липецкая область',
@@ -3714,30 +3720,30 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_forest_50m'
     #     )
-    # arable_gdf = gpd.read_file(
-    #     'result/Lipetskaya_lulc_sample.gpkg', 
-    #     layer='Lipetskaya_lulc_arable'
-    #     )
-    arable_buffer = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_arable_buffer'
-        )
-    meadow_gdf = gpd.read_file(
+    arable_gdf = gpd.read_file(
         'result/Lipetskaya_lulc_sample.gpkg', 
-        layer='Lipetskaya_lulc_meadow'
+        layer='Lipetskaya_lulc_arable'
         )
-    limitation_full = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_limitation_full'
-        )
+    # arable_buffer = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_arable_buffer'
+    #     )
+    # meadow_gdf = gpd.read_file(
+    #     'result/Lipetskaya_lulc_sample.gpkg', 
+    #     layer='Lipetskaya_lulc_meadow'
+    #     )
+    # limitation_full = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_limitation_full'
+    #     )
     # arable_buffer_eliminate = gpd.read_file(
     #     'result/Lipetskaya_Limitations.gpkg', 
     #     layer='Lipetskaya_arable_buffer_eliminate'
     #     )
-    # belt_line = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_belt_line'
-    #     )
+    belt_line = gpd.read_file(
+        'result/Lipetskaya_Limitations.gpkg', 
+        layer='Lipetskaya_belt_line'
+        )
 
     # main_belt = gpd.read_file(
     #     'result/Lipetskaya_Limitations.gpkg', 
@@ -3820,29 +3826,29 @@ if __name__ == '__main__':
     # )
     # pass
 
-    arable_buffer_eliminate = belt_calculate_arable_buffer_eliminate(
-        region='Липецкая область',
-        arable_buffer=arable_buffer,
-        meadow_gdf=meadow_gdf,
-        limitation_full=limitation_full,
-        arable_hole_area_threshold_m=10000
-    )
-    pass
+    # arable_buffer_eliminate = belt_calculate_arable_buffer_eliminate(
+    #     region='Липецкая область',
+    #     arable_buffer=arable_buffer,
+    #     meadow_gdf=meadow_gdf,
+    #     limitation_full=limitation_full,
+    #     arable_hole_area_threshold_m=10000
+    # )
+    # pass
 
     # _, belt_line = belt_calculate_centerlines(
     #     region='Липецкая область',
     #     polygons_gdf=arable_buffer_eliminate,
     #     segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
     #     min_branch_length_m = 100.0,   # prune tiny spurs
-    #     iterations=1
+    #     iterations=20
     # )
     # pass
 
-    # main_belt, gully_belt = belt_classify_main_gulch(
-    #     region='Липецкая область',
-    #     belt_line=belt_line,
-    #     arable_gdf=arable_gdf
-    # )
+    main_belt, gully_belt = belt_classify_main_gulch(
+        region='Липецкая область',
+        belt_line=belt_line,
+        arable_gdf=arable_gdf
+    )
 
     # forestation = belt_calculate_forestation(
     #     region='Липецкая область',
@@ -3905,10 +3911,7 @@ if __name__ == '__main__':
     #     region_buf_size=5000,
     # )
 
-    # pass
-    # prepare_road_limitations(
-    #     region='Липецкая область'
-    # )
+   
 
     # calculate_forest_belt(
     #     region='Липецкая область',
