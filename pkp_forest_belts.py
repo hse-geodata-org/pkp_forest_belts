@@ -1932,6 +1932,7 @@ def belt_calculate_centerlines(
 
     print("  - Расчет центральных линий и удаление коротких веток с помощью анализа графа...")
     lines = []
+    snowflakes = []
     for geom in g_exploded.geometry:
         if geom is None or geom.is_empty:
             continue
@@ -1951,9 +1952,11 @@ def belt_calculate_centerlines(
         if cl_geom.geom_type == "LineString":
             # longest_ls_exact = longest_route_from_multilines(cl_geom, tol=0.01, exact_for_cycles=True, cutoff=200)
             lines.append(cl_geom)
+            snowflakes.append(cl_geom)
         elif cl_geom.geom_type == "MultiLineString":
             # lines.extend(list(cl_geom.geoms))
             # longest_ls_exact = longest_route_from_multilines(cl_geom, tol=0.01, exact_for_cycles=True, cutoff=200)
+            snowflakes.extend(list(cl_geom.geoms))
             longest_ls_exact = remove_hanging_nodes(
                 cl_geom, 
                 tol=0.01, 
@@ -1970,6 +1973,7 @@ def belt_calculate_centerlines(
 
     # Build GeoDataFrame in metric CRS
     lines_gdf = gpd.GeoDataFrame(geometry=lines, crs=distance_crs)
+    snowflakes_gdf = gpd.GeoDataFrame(geometry=snowflakes, crs=distance_crs)
     
     if lines_gdf.empty:
         return gpd.GeoDataFrame(geometry=[], crs=4326)
@@ -1978,9 +1982,11 @@ def belt_calculate_centerlines(
     print("  - Обрезание линий слоем arable_buffer_eliminate...")
     try:
         lines_gdf = gpd.overlay(lines_gdf, g_proj[[g_proj.geometry.name]], how="intersection")
+        snowflakes_gdf = gpd.overlay(snowflakes_gdf, g_proj[[g_proj.geometry.name]], how="intersection")
     except Exception:
         try:
             lines_gdf = gpd.clip(lines_gdf, g_proj)
+            snowflakes_gdf = gpd.clip(snowflakes_gdf, g_proj)
         except Exception:
             pass
     
@@ -1997,6 +2003,7 @@ def belt_calculate_centerlines(
 
     # Back to WGS84
     arable_buffer_line = lines_gdf.to_crs(4326)
+    arable_buffer_snowflake = snowflakes_gdf.to_crs(4326)
 
     # Save result
     print(f"  - сохранение слоя {region_shortname}_arable_buffer_line...")
@@ -2005,6 +2012,8 @@ def belt_calculate_centerlines(
             out_path = os.path.join("result", f"{region_shortname}_limitations.gpkg")
             layer_name = f"{region_shortname}_arable_buffer_line"
             arable_buffer_line.to_file(out_path, layer=layer_name)
+            layer_name = f"{region_shortname}_arable_buffer_snowflake"
+            arable_buffer_snowflake.to_file(out_path, layer=layer_name)
         except Exception as e:
             print(f"Warning: failed to save centerlines: {e}")
 
@@ -2539,22 +2548,22 @@ def belt_calculate_forestation(
         
         # удалить текущие растры
         print(f" - удаление временных растров для {filename}...")
-        if row['tile_name'] != 'N052E038':
-            pass
-            for fl in [ 
-                input_file,
-                output_file_lzw,
-                output_tpi,
-                output_tpi_reclassed,
-                output_slope,
-                output_slope_reclassed,
-                meadows_reprojected,
-                forestation_raster,
-            ]:
-                try:
-                    os.remove(fl)
-                except Exception as err:
-                    print(err)
+        # if row['tile_name'] != 'N052E038':
+        pass
+        for fl in [ 
+            input_file,
+            output_file_lzw,
+            output_tpi,
+            output_tpi_reclassed,
+            output_slope,
+            output_slope_reclassed,
+            meadows_reprojected,
+            forestation_raster,
+        ]:
+            try:
+                os.remove(fl)
+            except Exception as err:
+                print(err)
     
     if final_gdf is not None and not final_gdf.empty:
         print(f" - сглаживание, объединение и фильтрация конечного результата...")
@@ -3720,10 +3729,10 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_forest_50m'
     #     )
-    arable_gdf = gpd.read_file(
-        'result/Lipetskaya_lulc_sample.gpkg', 
-        layer='Lipetskaya_lulc_arable'
-        )
+    # arable_gdf = gpd.read_file(
+    #     'result/Lipetskaya_lulc_sample.gpkg', 
+    #     layer='Lipetskaya_lulc_arable'
+    #     )
     # arable_buffer = gpd.read_file(
     #     'result/Lipetskaya_Limitations.gpkg', 
     #     layer='Lipetskaya_arable_buffer'
@@ -3736,14 +3745,14 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_Limitations.gpkg', 
     #     layer='Lipetskaya_limitation_full'
     #     )
-    # arable_buffer_eliminate = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_arable_buffer_eliminate'
-    #     )
-    belt_line = gpd.read_file(
+    arable_buffer_eliminate = gpd.read_file(
         'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_belt_line'
+        layer='Lipetskaya_arable_buffer_eliminate'
         )
+    # belt_line = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_belt_line'
+    #     )
 
     # main_belt = gpd.read_file(
     #     'result/Lipetskaya_Limitations.gpkg', 
@@ -3835,20 +3844,20 @@ if __name__ == '__main__':
     # )
     # pass
 
-    # _, belt_line = belt_calculate_centerlines(
-    #     region='Липецкая область',
-    #     polygons_gdf=arable_buffer_eliminate,
-    #     segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
-    #     min_branch_length_m = 100.0,   # prune tiny spurs
-    #     iterations=20
-    # )
-    # pass
-
-    main_belt, gully_belt = belt_classify_main_gulch(
+    _, belt_line = belt_calculate_centerlines(
         region='Липецкая область',
-        belt_line=belt_line,
-        arable_gdf=arable_gdf
+        polygons_gdf=arable_buffer_eliminate,
+        segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
+        min_branch_length_m = 100.0,   # prune tiny spurs
+        iterations=20
     )
+    pass
+
+    # main_belt, gully_belt = belt_classify_main_gulch(
+    #     region='Липецкая область',
+    #     belt_line=belt_line,
+    #     arable_gdf=arable_gdf
+    # )
 
     # forestation = belt_calculate_forestation(
     #     region='Липецкая область',
