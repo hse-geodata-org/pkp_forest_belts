@@ -20,3 +20,4 @@ lulc/
 .secret/.yinfo
 .secret/.yinfo copy
 .secret/pkp-bot-service-account-auth-key.json
+test_project.qgz

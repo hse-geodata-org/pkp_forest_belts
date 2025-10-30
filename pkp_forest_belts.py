@@ -376,24 +376,57 @@ def remove_hanging_nodes(
     #         G.remove_nodes_from(isolated)
     #     if G.number_of_edges() == 0:
     #         return shapely.geometry.MultiLineString([])
+    # Repeat pruning process for specified number of iterations
     for _ in range(iterations):
+        # List to collect edges that should be removed in this iteration
         short_edges = []
+        # Get degree (number of connections) for each node in the graph
         deg = dict(G.degree())
-        for u, v in G.edges():
+        # Iterate through all edges with their stored data attributes
+        for u, v, data in G.edges(data=True):
+            # Extract the full LineString geometry stored in the edge
+            geom = data.get('geometry')
             try:
-                seg_len = shapely.geometry.LineString([u, v]).length
+                # Calculate length: use full polyline length if geometry exists, otherwise straight-line distance
+                seg_len = geom.length if geom is not None else shapely.geometry.LineString([u, v]).length
             except Exception:
-                seg_len = float("inf")
-            if (deg.get(u, 0) == 1 or deg.get(v, 0) == 1) and seg_len <= thr:
+                # If length calculation fails, set to infinity to prevent removal
+                # seg_len = float("inf")
+                seg_len = 0
+            # Check if edge is a "hanging" branch (one endpoint has degree 1) and is shorter than threshold
+            if (deg.get(u, 0) == 1 or deg.get(v, 0) == 1) and seg_len < thr:
+                # Mark this edge for removal
                 short_edges.append((u, v))
+        # Remove all marked short edges from the graph
         if short_edges:
             G.remove_edges_from(short_edges)
-        # Drop isolated nodes
+        # Find and remove nodes that became isolated (no connections) after edge removal
         isolated = [n for n, d in G.degree() if d == 0]
         if isolated:
             G.remove_nodes_from(isolated)
+        # If all edges have been removed, return empty MultiLineString
         if G.number_of_edges() == 0:
             return shapely.geometry.MultiLineString([])
+        
+        ###############попытка объединять линии на каждой итерации удаления коротких хвостов#######
+        segs = []
+        for u, v, data in G.edges(data=True):
+            geom = data.get('geometry')
+            if geom is not None:
+                segs.append(geom)
+            else:
+                # Fallback to straight line if geometry not stored
+                try:
+                    segs.append(shapely.geometry.LineString([u, v]))
+                except Exception:
+                    continue
+        if not segs:
+            return shapely.geometry.MultiLineString([])
+        cur_geom = shapely.geometry.MultiLineString(segs)
+        cur_geom = shapely.ops.linemerge(cur_geom)
+        G = graph_from_multiline(cur_geom, tol=tol, weight_by_length=True)
+        ###############конец попытки объединять линии на каждой итерации удаления коротких хвостов#######
+        
 
     # Reconstruct geometry from remaining edges
     segs = []
@@ -1974,8 +2007,9 @@ def belt_calculate_centerlines(
                 cl_geom = cl_geom.simplify(tolerance=simplify_tolerance, preserve_topology=True)
             if smooth:
                 cl_geom = gaussian_smooth(cl_geom, sigma=smooth_sigma)
-            lines.append(cl_geom)
-            snowflakes.append(cl_geom)
+            if cl_geom.length >= min_branch_length_m:
+                lines.append(cl_geom)
+                snowflakes.append(cl_geom)
         elif cl_geom.geom_type == "MultiLineString":
             # lines.extend(list(cl_geom.geoms))
             # longest_ls_exact = longest_route_from_multilines(cl_geom, tol=0.01, exact_for_cycles=True, cutoff=200)
@@ -1992,12 +2026,6 @@ def belt_calculate_centerlines(
                 if smooth:
                     longest_ls_exact = gaussian_smooth(longest_ls_exact, sigma=smooth_sigma)
                 lines.append(longest_ls_exact)
-            else:
-                if simplify:
-                    cl_geom = cl_geom.simplify(tolerance=simplify_tolerance, preserve_topology=True)
-                if smooth:
-                    cl_geom = gaussian_smooth(cl_geom, sigma=smooth_sigma)
-                lines.extend(list(cl_geom.geoms))
 
     if not lines:
         return gpd.GeoDataFrame(geometry=[], crs=4326)
@@ -3599,7 +3627,7 @@ def calculate_forest_belt(
         simplify=True,
         simplify_tolerance=0.5,
         smooth=True,
-        smooth_sigma=2
+        smooth_sigma=0.5
     )
 
     ####РАЗДЕЛЕНИЕ ЛЕСОПОЛОС НА ПРИБАЛОЧНЫЕ И ПОЛЕЗАЩИТНЫЕ###
@@ -3764,10 +3792,10 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_forest_50m'
     #     )
-    # arable_gdf = gpd.read_file(
-    #     'result/Lipetskaya_lulc_sample.gpkg', 
-    #     layer='Lipetskaya_lulc_arable'
-    #     )
+    arable_gdf = gpd.read_file(
+        'result/Lipetskaya_lulc_sample.gpkg', 
+        layer='Lipetskaya_lulc_arable'
+        )
     # arable_buffer = gpd.read_file(
     #     'result/Lipetskaya_Limitations.gpkg', 
     #     layer='Lipetskaya_arable_buffer'
@@ -3883,20 +3911,20 @@ if __name__ == '__main__':
         region='Липецкая область',
         polygons_gdf=arable_buffer_eliminate,
         segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
-        min_branch_length_m = 100,   # prune tiny spurs
-        iterations=5,
+        min_branch_length_m = 70,   # prune tiny spurs
+        iterations=10,
         simplify=True,
         simplify_tolerance=0.5,
         smooth=True,
-        smooth_sigma=2
+        smooth_sigma=0.5
     )
     pass
 
-    # main_belt, gully_belt = belt_classify_main_gulch(
-    #     region='Липецкая область',
-    #     belt_line=belt_line,
-    #     arable_gdf=arable_gdf
-    # )
+    main_belt, gully_belt = belt_classify_main_gulch(
+        region='Липецкая область',
+        belt_line=belt_line,
+        arable_gdf=arable_gdf
+    )
 
     # forestation = belt_calculate_forestation(
     #     region='Липецкая область',
