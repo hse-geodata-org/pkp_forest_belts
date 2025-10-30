@@ -148,10 +148,18 @@ def gaussian_smooth(geom, sigma=2):
         return shapely.geometry.MultiPolygon(smoothed_parts)
     elif geom.geom_type == 'LineString':
         coords = np.array(geom.coords)
+        if len(coords) < 3:
+            return geom  # Can't smooth lines with less than 3 points
+        # Save original start and end points (only X, Y)
+        start_point = coords[0, :2].copy()
+        end_point = coords[-1, :2].copy()
         # For LineStrings, use 'nearest' mode instead of 'wrap' to avoid connecting endpoints
         x_smooth = gaussian_filter1d(coords[:, 0], sigma=sigma, mode='nearest')
         y_smooth = gaussian_filter1d(coords[:, 1], sigma=sigma, mode='nearest')
         smoothed_coords = np.column_stack([x_smooth, y_smooth])
+        # Restore original start and end points
+        smoothed_coords[0] = start_point
+        smoothed_coords[-1] = end_point
         return shapely.geometry.LineString(smoothed_coords)
     elif geom.geom_type == 'MultiLineString':
         smoothed_parts = [
@@ -215,7 +223,7 @@ def graph_from_multiline(multi: shapely.geometry.MultiLineString, tol=0.0, weigh
     """
     Build an undirected NetworkX graph from a MultiLineString.
     Nodes are (x,y) tuples (optionally snapped/rounded with `tol`).
-    Edge weight is geometric length (if weight_by_length).
+    Each edge stores the full LineString geometry and weight.
     """
     G = nx.Graph()
     if multi is None or multi.is_empty:
@@ -225,19 +233,19 @@ def graph_from_multiline(multi: shapely.geometry.MultiLineString, tol=0.0, weigh
         if ls is None or ls.is_empty: 
             continue
         coords = list(ls.coords)
-        # Add edges for each segment between consecutive vertices
-        for i in range(len(coords)-1):
-            a = _round_xy(coords[i], tol)
-            b = _round_xy(coords[i+1], tol)
-            if a == b:
-                continue
-            w = shapely.geometry.LineString([a, b]).length if weight_by_length else 1.0
-            # If multiple parallel edges exist, keep the max weight
-            if G.has_edge(a, b):
-                if w > G[a][b].get("weight", 1.0):
-                    G[a][b]["weight"] = w
-            else:
-                G.add_edge(a, b, weight=w)
+        # Add edge for the entire LineString from start to end
+        a = _round_xy(coords[0], tol)
+        b = _round_xy(coords[-1], tol)
+        if a == b:
+            continue
+        w = ls.length if weight_by_length else 1.0
+        # If multiple parallel edges exist, keep the one with max weight
+        if G.has_edge(a, b):
+            if w > G[a][b].get("weight", 1.0):
+                G[a][b]["weight"] = w
+                G[a][b]["geometry"] = ls
+        else:
+            G.add_edge(a, b, weight=w, geometry=ls)
     return G
 
 
@@ -342,7 +350,7 @@ def remove_hanging_nodes(
     Note: Components consisting entirely of short hanging edges may be fully removed.
     """
     # Build graph from geometry
-    G = graph_from_multiline(multi, tol=tol, weight_by_length=False)
+    G = graph_from_multiline(multi, tol=tol, weight_by_length=True)
     # Nothing to do
     if G.number_of_edges() == 0:
         return shapely.geometry.MultiLineString([])
@@ -389,11 +397,16 @@ def remove_hanging_nodes(
 
     # Reconstruct geometry from remaining edges
     segs = []
-    for u, v in G.edges():
-        try:
-            segs.append(shapely.geometry.LineString([u, v]))
-        except Exception:
-            continue
+    for u, v, data in G.edges(data=True):
+        geom = data.get('geometry')
+        if geom is not None:
+            segs.append(geom)
+        else:
+            # Fallback to straight line if geometry not stored
+            try:
+                segs.append(shapely.geometry.LineString([u, v]))
+            except Exception:
+                continue
     if not segs:
         return shapely.geometry.MultiLineString([])
     return shapely.geometry.MultiLineString(segs)
@@ -1898,6 +1911,10 @@ def belt_calculate_centerlines(
     min_branch_length_m = 100,   # prune tiny spurs
     geometry_field='geometry',
     iterations=1,
+    smooth=False,
+    smooth_sigma=1,
+    simplify=False,
+    simplify_tolerance=0.1,
     write_output=True
 ):
     # Compute vector centerlines using the 'centerline' library.
@@ -1944,13 +1961,19 @@ def belt_calculate_centerlines(
                 geom, 
                 interpolation_distance=segmentize_maxlen_m
                 )
-            cl_geom = cl.geometry
+            # cl_geom = cl.geometry
+            cl_geom = shapely.ops.linemerge(cl.geometry)
+            
         except Exception:
             continue
         if cl_geom is None or cl_geom.is_empty:
             continue
         if cl_geom.geom_type == "LineString":
-            # longest_ls_exact = longest_route_from_multilines(cl_geom, tol=0.01, exact_for_cycles=True, cutoff=200)
+            # longest_ls_exact = longest_route_from_multilines(cl_geom, tol=0.01, exact_for_cycles=True, cutoff=200)            
+            if simplify:
+                cl_geom = cl_geom.simplify(tolerance=simplify_tolerance, preserve_topology=True)
+            if smooth:
+                cl_geom = gaussian_smooth(cl_geom, sigma=smooth_sigma)
             lines.append(cl_geom)
             snowflakes.append(cl_geom)
         elif cl_geom.geom_type == "MultiLineString":
@@ -1964,8 +1987,16 @@ def belt_calculate_centerlines(
                 iterations=iterations
                 )
             if longest_ls_exact:
+                if simplify:
+                    longest_ls_exact = longest_ls_exact.simplify(tolerance=simplify_tolerance, preserve_topology=True)
+                if smooth:
+                    longest_ls_exact = gaussian_smooth(longest_ls_exact, sigma=smooth_sigma)
                 lines.append(longest_ls_exact)
             else:
+                if simplify:
+                    cl_geom = cl_geom.simplify(tolerance=simplify_tolerance, preserve_topology=True)
+                if smooth:
+                    cl_geom = gaussian_smooth(cl_geom, sigma=smooth_sigma)
                 lines.extend(list(cl_geom.geoms))
 
     if not lines:
@@ -3564,7 +3595,11 @@ def calculate_forest_belt(
         polygons_gdf=arable_buffer_eliminate,
         segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
         min_branch_length_m = 100.0,   # prune tiny spurs
-        iterations=20
+        iterations=5,
+        simplify=True,
+        simplify_tolerance=0.5,
+        smooth=True,
+        smooth_sigma=2
     )
 
     ####РАЗДЕЛЕНИЕ ЛЕСОПОЛОС НА ПРИБАЛОЧНЫЕ И ПОЛЕЗАЩИТНЫЕ###
@@ -3848,8 +3883,12 @@ if __name__ == '__main__':
         region='Липецкая область',
         polygons_gdf=arable_buffer_eliminate,
         segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
-        min_branch_length_m = 100.0,   # prune tiny spurs
-        iterations=20
+        min_branch_length_m = 100,   # prune tiny spurs
+        iterations=5,
+        simplify=True,
+        simplify_tolerance=0.5,
+        smooth=True,
+        smooth_sigma=2
     )
     pass
 
