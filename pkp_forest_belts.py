@@ -2100,7 +2100,9 @@ def belt_calculate_centerlines(
 def belt_classify_main_gulch(
     region='Липецкая область',
     belt_line=None,
-    arable_gdf=None
+    arable_gdf=None,
+    smooth=False,
+    sigma=1
 ):
     print("- Начинаю выделение основных и прибалочных лесополос...")
     # получить короткое название региона
@@ -2169,6 +2171,8 @@ def belt_classify_main_gulch(
         geom_field=belt_line.geometry.name
     )
     belt_line = belt_line.set_geometry(belt_buffers_geom2)
+    if smooth:
+        belt_line[belt_line.geometry.name] = belt_line[belt_line.geometry.name].apply(lambda geom: gaussian_smooth(geom, sigma=1))
 
     print(f"  - выделение и сохранение слоев {region_shortname}_main_belt и {region_shortname}_gully_belt...")
     # Save main belts (type == 'основные') as a separate layer
@@ -3634,7 +3638,9 @@ def calculate_forest_belt(
     main_belt, gully_belt = belt_classify_main_gulch(
         region=region,
         belt_line=belt_line,
-        arable_gdf=arable_gdf
+        arable_gdf=arable_gdf,
+        smooth=True,
+        sigma=1
     )
 
     ###################СПЛОШНОЕ ОБЛЕСЕНИЕ####################
@@ -3912,7 +3918,7 @@ if __name__ == '__main__':
         polygons_gdf=arable_buffer_eliminate,
         segmentize_maxlen_m = 5.0,   # densify polygon boundary before centerline
         min_branch_length_m = 70,   # prune tiny spurs
-        iterations=10,
+        iterations=5,
         simplify=True,
         simplify_tolerance=0.5,
         smooth=True,
@@ -3923,7 +3929,8 @@ if __name__ == '__main__':
     main_belt, gully_belt = belt_classify_main_gulch(
         region='Липецкая область',
         belt_line=belt_line,
-        arable_gdf=arable_gdf
+        arable_gdf=arable_gdf,
+        smooth=True
     )
 
     # forestation = belt_calculate_forestation(
