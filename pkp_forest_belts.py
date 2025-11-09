@@ -822,7 +822,7 @@ def prepare_water_limitations(
     
     # рассчитать геодезические длины после разбивки на отдельные линии
     gdf_l['leng'] = [geod.geometry_length(row[geometry_field]) for i, row in gdf_l.iterrows()]    
-    # gdf.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_line_dissolved_exploded')
+    gdf_l.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_lines_union')
     
     # отфильтровать ручьи и каналы короче 10 км
     gdf_l = gdf_l.query('not (fclass in("stream", "canal") and leng < 10000)')
@@ -839,7 +839,7 @@ def prepare_water_limitations(
     # расчет значений размеров буферов
     gdf_l_buffered['buf'] = [50 if x <= 10000 else 100 if 10000 < x <= 50000 else 200 for x in gdf_l_buffered['leng']]
     gdf_l['buf'] = [50 if x <= 10000 else 100 if 10000 < x <= 50000 else 200 for x in gdf_l['leng']]
-    # gdf_l.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_lines_buf')
+    gdf_l.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_lines_buf')
     water_lines_buf = gdf_l_buffered.copy()
     # вычислить геодезические буферы по полю buf  
     buffer_geom = calculate_geod_buffers(gdf_l_buffered, buffer_crs, 'field', 'buf', geom_field='geom')
@@ -4180,12 +4180,15 @@ if __name__ == '__main__':
     current_dir = os.getcwd()
 
     # prepare_water_limitations(
-    #     region='Липецкая область',
-    #     result_gpkg='result/water_limitations.gpkg',
+    #     postgres_info='.secret/.gdcdb',
+    #     region='Калужская область',
+    #     water_line_table='osm.gis_osm_waterways_free',
+    #     water_pol_table='osm.gis_osm_water_a_free',
+    #     regions_table='admin.hse_russia_regions',
+    #     region_buf_size=0,
     #     buffer_distance = 5,
     #     buffer_crs = 'utm'
     #     )
-    # pass
     
     # slope_more_12 = prepare_slope_limitations(
     #     region='Липецкая область',
@@ -4299,26 +4302,26 @@ if __name__ == '__main__':
     #     layer='Lipetskaya_belt_line'
     #     )
 
-    main_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_main_belt'
-        )
-    gully_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_gully_belt'
-        )
-    forestation = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_forestation'
-        )
-    secondary_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_secondary_belt'
-        )
-    road_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_road_belt'
-        )
+    # main_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_main_belt'
+    #     )
+    # gully_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_gully_belt'
+    #     )
+    # forestation = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_forestation'
+    #     )
+    # secondary_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_secondary_belt'
+    #     )
+    # road_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_road_belt'
+    #     )
 
 
     region_shortname = get_region_shortname('Липецкая область')
@@ -4472,24 +4475,17 @@ if __name__ == '__main__':
     #     build_gdf=build_gdf
     # )
 
-    forest_belt_nature = belt_forest_belt_nature(
-        postgres_info='.secret/.gdcdb',
-        regions_table='sber.municipal_districts_newregion',
-        region='Липецкая область', 
-        main_belt_gdf=main_belt,
-        secondary_belt_gdf=secondary_belt,
-        gully_belt_gdf=gully_belt,
-        forestation_gdf=forestation,
-        road_belt_gdf=road_belt,
-        region_buf_size=0,
-    )
-
-   
-
-
-
-
-   
+    # forest_belt_nature = belt_forest_belt_nature(
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='sber.municipal_districts_newregion',
+    #     region='Липецкая область', 
+    #     main_belt_gdf=main_belt,
+    #     secondary_belt_gdf=secondary_belt,
+    #     gully_belt_gdf=gully_belt,
+    #     forestation_gdf=forestation,
+    #     road_belt_gdf=road_belt,
+    #     region_buf_size=0,
+    # )
 
     # calculate_forest_belt(
     #     region='Липецкая область',
