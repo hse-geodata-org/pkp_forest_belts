@@ -758,9 +758,11 @@ def prepare_water_limitations(
     #     raise
     
     ###################################################################
+    print(f"- Начинаю расчет водных ограничений для региона {region}...")
 
     region_shortname = get_region_shortname(region)
 
+    print(f"  - Выборка водных объектов из базы данных...")
     try:
         with open(postgres_info, encoding='utf-8') as f:
             pg = json.load(f)
@@ -802,33 +804,41 @@ def prepare_water_limitations(
         raise
 
     ######################################
-    
+    print("  - Начинаю обработку линейных водных объектов...")
     # сливаем геометрию по полям fclass и name
+    print(f"  - Слияние по полям fclass и name...")
     gdf_l = gdf_l.dissolve(by=['fclass', 'name'], dropna=False)
     
     # Объединяем куски полилиний
+    print(f"  - Объединение кусков полилиний...")
     gdf_l[geometry_field] = gdf_l[geometry_field].line_merge()
     
     # пересчитать в WGS-84 для вычисления геодезических расстояний
+    print(f"  - Пересчет в WGS-84 для вычисления геодезических расстояний...")
     gdf_l = gdf_l.to_crs(4326)
     
     # рассчитать геодезические длины
+    print(f"  - Рассчет геодезических длин...")
     geod = Geod(ellps='WGS84')
     gdf_l['leng'] = [geod.geometry_length(row[geometry_field]) for i, row in gdf_l.iterrows()]    
     # gdf.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_line_dissolved')
 
     # разбить мульти полилинии на отдельные
+    print(f"  - Разбивка мульти полилиний на отдельные...")
     gdf_l = gdf_l.explode()
     
     # рассчитать геодезические длины после разбивки на отдельные линии
+    print(f"  - Рассчет геодезических длин водных объектов после разбивки на отдельные...")
     gdf_l['leng'] = [geod.geometry_length(row[geometry_field]) for i, row in gdf_l.iterrows()]    
     gdf_l.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_lines_union')
     
     # отфильтровать ручьи и каналы короче 10 км
+    print(f"  - Отфильтровка ручьев и каналов короче 10 км...")
     gdf_l = gdf_l.query('not (fclass in("stream", "canal") and leng < 10000)')
     # gdf_l.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_line_dissolved_exploded_filtered')
     
     # Расчет буферов вокруг линейных водных объектов
+    print(f"  - Расчет буферов...")
     buffer_geom = calculate_geod_buffers(gdf_l, buffer_crs, 'value', buffer_distance, geom_field='geom')
     
     # gdf_l['buffer_geometry'] = buffer_geom
@@ -837,25 +847,31 @@ def prepare_water_limitations(
     # my_columns.remove('buffer_geometry')
     gdf_l_buffered = gdf_l_buffered[my_columns]
     # расчет значений размеров буферов
+    print(f"  - Расчет значений размеров буферов...")
     gdf_l_buffered['buf'] = [50 if x <= 10000 else 100 if 10000 < x <= 50000 else 200 for x in gdf_l_buffered['leng']]
     gdf_l['buf'] = [50 if x <= 10000 else 100 if 10000 < x <= 50000 else 200 for x in gdf_l['leng']]
     gdf_l.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_lines_buf')
     water_lines_buf = gdf_l_buffered.copy()
     # вычислить геодезические буферы по полю buf  
+    print(f"  - Вычисление геодезических буферов по полю buf...")
     buffer_geom = calculate_geod_buffers(gdf_l_buffered, buffer_crs, 'field', 'buf', geom_field='geom')
     wp2 = gdf_l_buffered.set_geometry(buffer_geom)  
     # wp2.to_file(f"result/{region_shortname}_limitations.gpkg", layer='wp2')
     
     # ---------------------------------------
     # обработка полигональных водных объектов
+    print(f"  - Начинаю обработку полигональных водных объектов...")
     
     # перепроецировать в WGS-1984
+    print(f"  - Перепроецирование в WGS-1984...")
     gdf_p = gdf_p.to_crs(4326)
     # убрать все wetland
+    print(f"  - Убрать все wetland...")
     gdf_p = gdf_p.query('not fclass in("wetland")')
     water_poly = gdf_p.copy()
     
     # Вычисление "длин" площадных объектов
+    print(f"  - Вычисление 'длин' площадных объектов...")
     # Сделать пространственное присоединение обработанных линейных объектов по пересечению
     gdf_l = gdf_l.clip(gdf_p)
     gdf_l['leng'] = [geod.geometry_length(row[geometry_field]) for i, row in gdf_l.iterrows()]
@@ -873,6 +889,7 @@ def prepare_water_limitations(
     gdf_p = gdf_p.rename(columns=new_column_names)
     
     # Вычислить геодезические площади
+    print(f"  - Вычисление геодезических площадей...")
     gdf_p['area_km'] = [abs(geod.geometry_area_perimeter(row[geometry_field])[0]) / 1000000 for i, row in gdf_p.iterrows()]
     
     # Там где не присоединилась длина линейного объекта и площадь больше 0.5, вставить buf=50
@@ -881,11 +898,13 @@ def prepare_water_limitations(
     # убрать объекты с пустыми значениями buf
     gdf_p = gdf_p[gdf_p['buf'].notnull()]
     # вычислить геодезические буферы по полю buf  
+    print(f"  - Вычисление геодезических буферов по полю buf...")
     buffer_geom = calculate_geod_buffers(gdf_p, buffer_crs, 'field', 'buf')
     wp1 = gdf_p.set_geometry(buffer_geom)
     # wp1.to_file(f"result/{region_shortname}_limitations.gpkg", layer='wp1')
     
     # Объединение двух итоговых слоев
+    print(f"  - Объединение двух итоговых слоев...")
     wp1_wp2 = pd.concat([wp1, wp2])
     # wp1_wp2.to_file('result/water_line.gpkg', layer='wp1_wp2')
     water_prot_zone = wp1_wp2.union_all()
@@ -895,10 +914,10 @@ def prepare_water_limitations(
     water_prot_zone = water_prot_zone.explode()
 
     
-    
+    print(f"  - Сохранение итогового слоя result/{region_shortname}_limitations.gpkg/water_prot_zone...")
     # water_prot_zone.to_file(result_gpkg, layer='water_prot_zone')
     water_prot_zone.to_file(f"result/{region_shortname}_limitations.gpkg", layer='water_prot_zone')
-
+    print(f"- Расчет водных ограничений для региона {region} завершен успешно!")
     return (water_poly, water_lines_buf, water_prot_zone)
 
 
@@ -1168,6 +1187,8 @@ def prepare_wetlands_limitations(
     wetlands_table='osm.osm_wetlands_russia_final',
     region_buf_size=0,
 ):
+    print(f"- Начинаю расчет болотных ограничений для региона {region}...")
+    print(f"  - Выборка данных из базы...")
     try:
         with open(postgres_info, encoding='utf-8') as f:
             pg = json.load(f)
@@ -1195,12 +1216,15 @@ def prepare_wetlands_limitations(
     except:
         raise
     region_shortname = get_region_shortname(region)
+    print(f"  - Обрезка данных по границе региона...")
     wetlands_gdf = wetlands_gdf.clip(region_gdf)
+    print(f"  - Сохранение итогового слоя result/{region_shortname}_limitations.gpkg/{region_shortname}_wetlands...")
     wetlands_gdf.to_file(
         # 'result/wetlands_limitations.gpkg', 
         f"result/{region_shortname}_limitations.gpkg", 
         layer=f"{region_shortname}_wetlands"
         )
+    print(f"- Расчет болотных ограничений для региона {region} завершен успешно!")
     return wetlands_gdf
 
 
@@ -1211,6 +1235,8 @@ def prepare_soil_limitations(
     soil_table='egrpr_esoil_ru.soil_map_m2_5_v',
     region_buf_size=0,
 ):
+    print(f"- Начинаю расчет почвенных ограничений для региона {region}...")
+    print(f"  - Выборка данных из базы...")
     try:
         with open(postgres_info, encoding='utf-8') as f:
             pg = json.load(f)
@@ -1241,12 +1267,15 @@ def prepare_soil_limitations(
         raise
     if not soil_gdf.empty:
         region_shortname = get_region_shortname(region)
+        print(f"  - Обрезка данных по границе региона...")
         soil_gdf = soil_gdf.clip(region_gdf)
+        print(f"  - Сохранение итогового слоя result/{region_shortname}_limitations.gpkg/{region_shortname}_soil...")
         soil_gdf.to_file(
             # 'result/soil_limitations.gpkg', 
             f"result/{region_shortname}_limitations.gpkg", 
             layer=f"{region_shortname}_soil"
         )
+        print(f"- Расчет почвенных ограничений для региона {region} завершен успешно!")
         return soil_gdf
     return None
 
@@ -1259,6 +1288,8 @@ def prepare_settlements_limitations(
     osm_table='osm.gis_osm_places_a_free',
     region_buf_size=0,
 ):
+    print(f"- Начинаю расчет ограничений населенных пунктов для региона {region}...")
+    print(f"  - Выборка данных из базы...")
     try:
         with open(postgres_info, encoding='utf-8') as f:
             pg = json.load(f)
@@ -1275,11 +1306,13 @@ def prepare_settlements_limitations(
     except:
         raise
     try:
+        print(f"  - Выборка границы региона...")
         sql = f"select * from {regions_table} where lower(region) = '{region.lower()}';"
         region_gdf = gpd.read_postgis(sql, engine)
         if region_buf_size > 0:
             region_buffer = calculate_geod_buffers(region_gdf, 'laea', 'value', region_buf_size, geom_field='geom')
             region_gdf = region_gdf.set_geometry(region_buffer)
+        print(f"  - Выборка данных NSPD...")
         sql = f"select * from {nspd_table} nspd " \
               f"where ST_Intersects(" \
               f"(select ST_Buffer(geom::geography, {region_buf_size})::geometry from {regions_table} where lower(region) = '{region.lower()}' limit 1), " \
@@ -1287,6 +1320,7 @@ def prepare_settlements_limitations(
               f");"
         nspd_gdf = gpd.read_postgis(sql, engine)
         nspd_gdf = nspd_gdf.to_crs('EPSG:4326')
+        print(f"  - Выборка данных OSM...")
         sql = f"select * from {osm_table} osm " \
               f"where ST_Intersects(" \
               f"(select ST_Buffer(geom::geography, {region_buf_size})::geometry from {regions_table} where lower(region) = '{region.lower()}' limit 1), " \
@@ -1298,9 +1332,10 @@ def prepare_settlements_limitations(
         raise
     
     # выбрать только те объекты из OSM, которые не пересекают объекты из NSPD
+    print(f"  - Выборка данных OSM, не пересекающихся с NSPD...")
     tmp = gpd.sjoin(osm_gdf, nspd_gdf[['geom']], how='left', predicate='intersects')
     osm_gdf = tmp[tmp.index_right.isna()].drop(columns=['index_right']).copy()
-
+    print(f"  - Объединение данных NSPD и OSM...")
     # Unify column set
     all_cols = list(set(osm_gdf.columns) | set(nspd_gdf.columns))
 
@@ -1320,15 +1355,17 @@ def prepare_settlements_limitations(
         geometry='geom',  # or osm_gdf.geometry.name
         crs=osm_gdf.crs
     )
-
+    print(f"  - Обрезка данных по границе региона...")
     if not settlements_gdf.empty:
         region_shortname = get_region_shortname(region)
         settlements_gdf = settlements_gdf.clip(region_gdf)
+        print(f"  - Сохранение итогового слоя result/{region_shortname}_limitations.gpkg/{region_shortname}_settlements...")
         settlements_gdf.to_file(
             # 'result/poppol_limitations.gpkg', 
             f"result/{region_shortname}_limitations.gpkg", 
             layer=f"poppol_merge_{region_shortname}"
         )
+        print(f"- Расчет ограничений населенных пунктов для региона {region} завершен успешно!")
         return settlements_gdf
     return None
 
@@ -1340,6 +1377,8 @@ def prepare_oopt_limitations(
     oopt_table='ecology.pkp_oopt_russia_2024',
     region_buf_size=0,
 ):
+    print(f"- Начинаю расчет ограничений ООПТ для региона {region}...")
+    print(f"  - Выборка данных из базы...")
     try:
         with open(postgres_info, encoding='utf-8') as f:
             pg = json.load(f)
@@ -1374,12 +1413,15 @@ def prepare_oopt_limitations(
         raise
     if not oopt_gdf.empty:
         region_shortname = get_region_shortname(region)
+        print(f"  - Обрезка данных по границе региона...")
         oopt_gdf = oopt_gdf.clip(region_gdf)
+        print(f"  - Сохранение итогового слоя result/{region_shortname}_limitations.gpkg/{region_shortname}_oopt...")
         oopt_gdf.to_file(
             # 'result/oopt_limitations.gpkg', 
             f"result/{region_shortname}_limitations.gpkg", 
             layer=f"{region_shortname}_oopt"
         )
+        print(f"- Расчет ограничений ООПТ для региона {region} завершен успешно!")
         return oopt_gdf
     return None
 
@@ -1391,6 +1433,8 @@ def prepare_forest_limitations(
     forest_table='forest.pkp_forest_glf',
     region_buf_size=0,
 ):
+    print(f"- Начинаю расчет ограничений леса для региона {region}...")
+    print(f"  - Выборка данных из базы...")
     try:
         with open(postgres_info, encoding='utf-8') as f:
             pg = json.load(f)
@@ -1423,16 +1467,21 @@ def prepare_forest_limitations(
         raise
     if not forest_gdf.empty:
         region_shortname = get_region_shortname(region)
+        print(f"  - Проеверка корректности геометрии...")
         forest_gdf = forest_gdf.set_geometry(forest_gdf.geometry.make_valid())
+        print(f"  - Обрезка данных по границе региона...")
         forest_gdf = forest_gdf.clip(region_gdf)
+        print(f"  - Объединение данных...")
         # forest_gdf = forest_gdf.dissolve(by=['vmr'], dropna=False)
         forest_gdf = forest_gdf.dissolve(dropna=False)
         forest_gdf = forest_gdf.explode()
+        print(f"  - Сохранение итогового слоя result/{region_shortname}_limitations.gpkg/{region_shortname}_forest...")
         forest_gdf.to_file(
             # 'result/forest_limitations.gpkg', 
             f"result/{region_shortname}_limitations.gpkg", 
             layer=f"forest_{region_shortname}"
         )
+        print(f"- Расчет ограничений леса для региона {region} завершен успешно!")
         return forest_gdf
     return None
 
@@ -2220,6 +2269,9 @@ def belt_calculate_forestation(
     use_wbt=True
 ):
     print(f"#######{region} - РАСЧЕТ ЗОН СПЛОШНОГО ОБЛЕСЕНИЯ#######")
+    region_shortname = get_region_shortname(region)
+    if region_shortname is None:
+        region_shortname = "region"
     print(" - загрузка разграфки FABDEM на территорию региона...")
     pass
     # Загрузка параметров подключения к PostgreSQL из JSON-файла
@@ -2569,7 +2621,7 @@ def belt_calculate_forestation(
                 if records:
                     forestation_gdf = gpd.GeoDataFrame(records, geometry='geometry', crs=src.crs)
                 else:
-                    continue
+                    # continue                    
                     # Create empty GeoDataFrame with proper schema
                     forestation_gdf = gpd.GeoDataFrame(
                         {'value': pd.Series(dtype='int'), 'geometry': pd.Series(dtype='object')},
@@ -2596,7 +2648,7 @@ def belt_calculate_forestation(
         #     layer=f'{region_shortname}_forestation'
         #     )
         # pass
-        print(f" - добавление сплошного облесения из {filename} в кончный результат...")
+        print(f" - добавление сплошного облесения из {filename} в конечный результат...")
         if forestation_gdf is not None and not forestation_gdf.empty:
             if i == 0 or final_gdf is None:
                 final_gdf = forestation_gdf               
@@ -3282,7 +3334,7 @@ def belt_forest_belt_nature(
         raise
     print("  - Выборка границ региона из базы...")
     try:
-        sql = f"select row_number() over() as gid, st_union(geom) as geom, region_name from {regions_table} where lower(region_name) = '{region.lower()}' group by region_name;"
+        sql = f"select row_number() over() as gid, st_union(geom) as geom, region_name from {regions_table} where '{region}' ~* region_name or region_name ~* '{region}' group by region_name;"
         with engine.connect() as conn:
             region_gdf = gpd.read_postgis(sql, conn)        
     except:
@@ -3542,6 +3594,8 @@ def prepare_limitations(
     prepare_forest_limitations : Подготовка ограничений по существующим лесам
     """
     
+    print(f"### Начинаю расчет ограничений для региона {region}...")
+
     water_poly, water_lines_buf, water_prot_zone = prepare_water_limitations(
         postgres_info=postgres_info,
         region=region,
@@ -3908,7 +3962,7 @@ def calculate_forest_belt(
         road_buf_size_rule=road_buf_size_rule_belt,
         road_buffer_crs='utm',
         forest_50m=forest_50m,
-        railway_osm_buf=railway_OSM_buf,
+        railway_OSM_buf=railway_OSM_buf,
         limitation=limitation_all,
         build_gdf=build_gdf
     )
@@ -4231,28 +4285,28 @@ if __name__ == '__main__':
 
     
         
-    limitation_all = prepare_limitations(
-        region='Республика Татарстан (Татарстан)',
-        postgres_info='.secret/.gdcdb',
-        regions_table='admin.hse_russia_regions',
-        region_buf_size=5000,
-        water_line_table='osm.gis_osm_waterways_free',
-        water_pol_table='osm.gis_osm_water_a_free',
-        hydro_buffer_distance_m=5,
-        hydro_buffer_crs='utm',
-        wetlands_table='osm.osm_wetlands_russia_final',
-        soil_table='egrpr_esoil_ru.soil_map_m2_5_v',
-        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-        slope_threshold=12,
-        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-        rescale_slope_raster=True,
-        slope_raster_rescale_size_m=10,
-        nspd_settlements_table='nspd.nspd_settlements_pol',
-        osm_settlements_table='osm.gis_osm_places_a_free',
-        oopt_table='ecology.pkp_oopt_russia_2024',
-        forest_table='forest.pkp_forest_glf'
-    )
-    pass
+    # limitation_all = prepare_limitations(
+    #     region='Республика Татарстан (Татарстан)',
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='admin.hse_russia_regions',
+    #     region_buf_size=5000,
+    #     water_line_table='osm.gis_osm_waterways_free',
+    #     water_pol_table='osm.gis_osm_water_a_free',
+    #     hydro_buffer_distance_m=5,
+    #     hydro_buffer_crs='utm',
+    #     wetlands_table='osm.osm_wetlands_russia_final',
+    #     soil_table='egrpr_esoil_ru.soil_map_m2_5_v',
+    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+    #     slope_threshold=12,
+    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+    #     rescale_slope_raster=True,
+    #     slope_raster_rescale_size_m=10,
+    #     nspd_settlements_table='nspd.nspd_settlements_pol',
+    #     osm_settlements_table='osm.gis_osm_places_a_free',
+    #     oopt_table='ecology.pkp_oopt_russia_2024',
+    #     forest_table='forest.pkp_forest_glf'
+    # )
+    # pass
 
     
 
@@ -4260,10 +4314,10 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_lulc.gpkg', 
     #     layer='Lipetskaya_lulc_forest'
     #     )
-    # build_gdf = gpd.read_file(
-    #     'result/Lipetskaya_lulc_sample.gpkg', 
-    #     layer='Lipetskaya_lulc_build'
-    #     )
+    build_gdf = gpd.read_file(
+        'result/Tatarstan_lulc.gpkg', 
+        layer='Tatarstan_lulc_build'
+        )
     # limitation_all = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_all_limitations'
@@ -4280,10 +4334,18 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_railway_OSM_buf'
     #     )
+    railway_OSM_buf = gpd.read_file(
+        'result/Tatarstan_limitations.gpkg', 
+        layer='Tatarstan_railway_OSM_buf'
+        )
     # forest_50m = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_forest_50m'
     #     )
+    forest_50m = gpd.read_file(
+        'result/Tatarstan_limitations.gpkg', 
+        layer='Tatarstan_forest_50m'
+        )
     # arable_gdf = gpd.read_file(
     #     'result/Lipetskaya_lulc_sample.gpkg', 
     #     layer='Lipetskaya_lulc_arable'
@@ -4309,26 +4371,26 @@ if __name__ == '__main__':
     #     layer='Lipetskaya_belt_line'
     #     )
 
-    # main_belt = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_main_belt'
-    #     )
-    # gully_belt = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_gully_belt'
-    #     )
-    # forestation = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_forestation'
-    #     )
-    # secondary_belt = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_secondary_belt'
-    #     )
-    # road_belt = gpd.read_file(
-    #     'result/Lipetskaya_Limitations.gpkg', 
-    #     layer='Lipetskaya_road_belt'
-    #     )
+    main_belt = gpd.read_file(
+        'result/Tatarstan_Limitations.gpkg', 
+        layer='Tatarstan_main_belt'
+        )
+    gully_belt = gpd.read_file(
+        'result/Tatarstan_Limitations.gpkg', 
+        layer='Tatarstan_gully_belt'
+        )
+    forestation = gpd.read_file(
+        'result/Tatarstan_Limitations.gpkg', 
+        layer='Tatarstan_forestation'
+        )
+    secondary_belt = gpd.read_file(
+        'result/Tatarstan_Limitations.gpkg', 
+        layer='Tatarstan_secondary_belt'
+        )
+    road_belt = gpd.read_file(
+        'result/Tatarstan_Limitations.gpkg', 
+        layer='Tatarstan_road_belt'
+        )
 
 
     region_shortname = get_region_shortname('Липецкая область')
@@ -4466,7 +4528,7 @@ if __name__ == '__main__':
 
     # road_belt = belt_calculate_road_belt(
     #     postgres_info='.secret/.gdcdb',
-    #     region='Липецкая область', 
+    #     region='Республика Татарстан (Татарстан)', 
     #     regions_table='admin.hse_russia_regions',
     #     region_buf_size=0,
     #     road_table='osm.gis_osm_roads_free',
@@ -4482,46 +4544,46 @@ if __name__ == '__main__':
     #     build_gdf=build_gdf
     # )
 
-    # forest_belt_nature = belt_forest_belt_nature(
-    #     postgres_info='.secret/.gdcdb',
-    #     regions_table='sber.municipal_districts_newregion',
-    #     region='Липецкая область', 
-    #     main_belt_gdf=main_belt,
-    #     secondary_belt_gdf=secondary_belt,
-    #     gully_belt_gdf=gully_belt,
-    #     forestation_gdf=forestation,
-    #     road_belt_gdf=road_belt,
-    #     region_buf_size=0,
-    # )
-
-    calculate_forest_belt(
-        region='Липецкая область',
-        limitation_all=limitation_all,   # geodataframe derived from prepare_limitations
-        lulc_link='lulc/tatarstan/S2LULC_10m_reclass_sample.tif',
+    forest_belt_nature = belt_forest_belt_nature(
         postgres_info='.secret/.gdcdb',
-        regions_table='admin.hse_russia_regions',
-        sber_index_table='sber.municipal_districts_newregion',
-        region_buf_size=5000,
-        road_table='osm.gis_osm_roads_free',
-        road_buf_size_rule_lim={
-            "fclass  in  ('primary', 'primary_link')": 80,
-            "fclass in ('motorway' , 'motorway_link')": 80,
-            "fclass in ('secondary', 'secondary_link')": 70,
-            "fclass in ('tertiary', 'tertiary_link')": 70,
-            "fclass in ('trunk', 'trunk_link')": 70,
-            "fclass in ('unclassified')": 70,
-        },
-        railway_table='osm.gis_osm_railways_free',
-        railway_buf_size=100,
-        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-        meadows_raster='lulc/lulc_meadows.tif',
-        tpi_threshold=2,
-        tpi_window_size_m=2000,
-        slope_threshold=12,
-        road_buf_size_rule_belt={
-                "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
-                "fclass in ('secondary' , 'secondary_link')": 3.5,
-                "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
-            },
+        regions_table='sber.municipal_districts_newregion',
+        region='Республика Татарстан (Татарстан)', 
+        main_belt_gdf=main_belt,
+        secondary_belt_gdf=secondary_belt,
+        gully_belt_gdf=gully_belt,
+        forestation_gdf=forestation,
+        road_belt_gdf=road_belt,
+        region_buf_size=0,
     )
+
+    # calculate_forest_belt(
+    #     region='Республика Татарстан (Татарстан)',
+    #     limitation_all=limitation_all,   # geodataframe derived from prepare_limitations
+    #     lulc_link='lulc/tatarstan/S2LULC_10m_reclass_sample.tif',
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='admin.hse_russia_regions',
+    #     sber_index_table='sber.municipal_districts_newregion',
+    #     region_buf_size=0,
+    #     road_table='osm.gis_osm_roads_free',
+    #     road_buf_size_rule_lim={
+    #         "fclass  in  ('primary', 'primary_link')": 80,
+    #         "fclass in ('motorway' , 'motorway_link')": 80,
+    #         "fclass in ('secondary', 'secondary_link')": 70,
+    #         "fclass in ('tertiary', 'tertiary_link')": 70,
+    #         "fclass in ('trunk', 'trunk_link')": 70,
+    #         "fclass in ('unclassified')": 70,
+    #     },
+    #     railway_table='osm.gis_osm_railways_free',
+    #     railway_buf_size=100,
+    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+    #     meadows_raster='lulc/lulc_meadows.tif',
+    #     tpi_threshold=2,
+    #     tpi_window_size_m=2000,
+    #     slope_threshold=12,
+    #     road_buf_size_rule_belt={
+    #             "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+    #             "fclass in ('secondary' , 'secondary_link')": 3.5,
+    #             "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
+    #         },
+    # )
