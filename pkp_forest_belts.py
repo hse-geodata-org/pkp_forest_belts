@@ -3746,7 +3746,7 @@ def calculate_forest_belt(
     fabdem_zip_path: str = r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
     meadows_raster: str = 'lulc/lulc_meadows.tif',
     tpi_threshold: int = 2,
-    tpi_window_size_m: int = 1000,
+    tpi_window_size_m: int = 2000,
     slope_threshold: int = 12,
     road_buf_size_rule_belt: dict = {
             "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
@@ -3819,7 +3819,7 @@ def calculate_forest_belt(
     ###################объединение ограничений########################
     limitation_full = belt_merge_limitation_full(
         region=region,
-        limitations_all=limitation_all,   # geodataframe derived from prepare_limitations
+        limitation_all=limitation_all,   # geodataframe derived from prepare_limitations
         road_OSM_cover_buf=road_OSM_cover_buf,   # geodataframe derived from calculate_road_buffer
         railway_OSM_buf=railway_OSM_buf,   # geodataframe derived from prepare_railway_limitations
         forest_50m=forest_50m   # geodataframe derived from calculate_forest_buffer
@@ -3838,7 +3838,8 @@ def calculate_forest_belt(
         region=region,
         arable_buffer=arable_buffer,
         meadow_gdf=meadow_gdf,
-        limitation_full=limitation_full
+        limitation_full=limitation_full,
+        arable_hole_area_threshold_m=10000
     )
 
     ####################централины######################
@@ -3907,6 +3908,7 @@ def calculate_forest_belt(
         road_buf_size_rule=road_buf_size_rule_belt,
         road_buffer_crs='utm',
         forest_50m=forest_50m,
+        railway_osm_buf=railway_OSM_buf,
         limitation=limitation_all,
         build_gdf=build_gdf
     )
@@ -3920,7 +3922,8 @@ def calculate_forest_belt(
         secondary_belt_gdf=secondary_belt,
         gully_belt_gdf=gully_belt,
         forestation_gdf=forestation,
-        road_belt_gdf=road_belt
+        road_belt_gdf=road_belt,
+        region_buf_size=region_buf_size
     )
 
     return main_belt, gully_belt, forestation, secondary_belt, road_belt, forest_belt_nature
@@ -4228,28 +4231,28 @@ if __name__ == '__main__':
 
     
         
-    # limitation_all = prepare_limitations(
-    #     region='Калужская область',
-    #     postgres_info='.secret/.gdcdb',
-    #     regions_table='admin.hse_russia_regions',
-    #     region_buf_size=5000,
-    #     water_line_table='osm.gis_osm_waterways_free',
-    #     water_pol_table='osm.gis_osm_water_a_free',
-    #     hydro_buffer_distance_m=5,
-    #     hydro_buffer_crs='utm',
-    #     wetlands_table='osm.osm_wetlands_russia_final',
-    #     soil_table='egrpr_esoil_ru.soil_map_m2_5_v',
-    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-    #     slope_threshold=12,
-    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-    #     rescale_slope_raster=True,
-    #     slope_raster_rescale_size_m=10,
-    #     nspd_settlements_table='nspd.nspd_settlements_pol',
-    #     osm_settlements_table='osm.gis_osm_places_a_free',
-    #     oopt_table='ecology.pkp_oopt_russia_2024',
-    #     forest_table='forest.pkp_forest_glf'
-    # )
-    # pass
+    limitation_all = prepare_limitations(
+        region='Республика Татарстан (Татарстан)',
+        postgres_info='.secret/.gdcdb',
+        regions_table='admin.hse_russia_regions',
+        region_buf_size=5000,
+        water_line_table='osm.gis_osm_waterways_free',
+        water_pol_table='osm.gis_osm_water_a_free',
+        hydro_buffer_distance_m=5,
+        hydro_buffer_crs='utm',
+        wetlands_table='osm.osm_wetlands_russia_final',
+        soil_table='egrpr_esoil_ru.soil_map_m2_5_v',
+        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+        slope_threshold=12,
+        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+        rescale_slope_raster=True,
+        slope_raster_rescale_size_m=10,
+        nspd_settlements_table='nspd.nspd_settlements_pol',
+        osm_settlements_table='osm.gis_osm_places_a_free',
+        oopt_table='ecology.pkp_oopt_russia_2024',
+        forest_table='forest.pkp_forest_glf'
+    )
+    pass
 
     
 
@@ -4265,6 +4268,10 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_all_limitations'
     #     )
+    limitation_all = gpd.read_file(
+        'result/Tatarstan_limitations.gpkg', 
+        layer='Tatarstan_all_limitations'
+        )
     # road_OSM_cover_buf = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_road_OSM_cover_buf'
@@ -4487,26 +4494,34 @@ if __name__ == '__main__':
     #     region_buf_size=0,
     # )
 
-    # calculate_forest_belt(
-    #     region='Липецкая область',
-    #     limitations_all=limitations_all,   # geodataframe derived from prepare_limitations
-    #     lulc_link='lulc/S2LULC_10m_LAEA_48_202507081046.tif',
-    #     postgres_info='.secret/.gdcdb',
-    #     regions_table='admin.hse_russia_regions',
-    #     region_buf_size=5000,
-    #     road_table='osm.gis_osm_roads_free',
-    #     road_buf_size_rule_lim={
-    #         "fclass  in  ('primary', 'primary_link')": 80,
-    #         "fclass in ('motorway' , 'motorway_link')": 80,
-    #         "fclass in ('secondary', 'secondary_link')": 70,
-    #         "fclass in ('tertiary', 'tertiary_link')": 70,
-    #         "fclass in ('trunk', 'trunk_link')": 70,
-    #         "fclass in ('unclassified')": 70,
-    #     },
-    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-    #     meadows_raster='lulc/lulc_meadows.tif',
-    #     tpi_threshold=2,
-    #     tpi_window_size_m=1000,
-    #     slope_threshold=12
-    # )
+    calculate_forest_belt(
+        region='Липецкая область',
+        limitation_all=limitation_all,   # geodataframe derived from prepare_limitations
+        lulc_link='lulc/tatarstan/S2LULC_10m_reclass_sample.tif',
+        postgres_info='.secret/.gdcdb',
+        regions_table='admin.hse_russia_regions',
+        sber_index_table='sber.municipal_districts_newregion',
+        region_buf_size=5000,
+        road_table='osm.gis_osm_roads_free',
+        road_buf_size_rule_lim={
+            "fclass  in  ('primary', 'primary_link')": 80,
+            "fclass in ('motorway' , 'motorway_link')": 80,
+            "fclass in ('secondary', 'secondary_link')": 70,
+            "fclass in ('tertiary', 'tertiary_link')": 70,
+            "fclass in ('trunk', 'trunk_link')": 70,
+            "fclass in ('unclassified')": 70,
+        },
+        railway_table='osm.gis_osm_railways_free',
+        railway_buf_size=100,
+        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+        meadows_raster='lulc/lulc_meadows.tif',
+        tpi_threshold=2,
+        tpi_window_size_m=2000,
+        slope_threshold=12,
+        road_buf_size_rule_belt={
+                "fclass in ('primary', 'primary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')": 7.5,
+                "fclass in ('secondary' , 'secondary_link')": 3.5,
+                "fclass in ('tertiary', 'tertiary_link', 'unclassified')": 3
+            },
+    )
