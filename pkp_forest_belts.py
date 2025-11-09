@@ -972,7 +972,8 @@ def prepare_slope_limitations(
     Исключения:
     - Любые ошибки чтения БД/файлов или обработки растров пробрасываются наверх, чтобы вызывающая сторона могла их обработать.
     """
-
+    print(f"- Начинаю расчет ограничений по уклонам рельефа для региона {region}...")
+    print(f"  - Выборка данных из базы...")
     try:
         with open(postgres_info, encoding='utf-8') as f:
             pg = json.load(f)
@@ -1012,12 +1013,14 @@ def prepare_slope_limitations(
 
     region_centr_lat = region_gdf.iloc[0]['geom'].centroid.y
     region_centr_lon = region_gdf.iloc[0]['geom'].centroid.x
-
+    
+    print(f"  - Начинаю перебор тайлов FABDEM...")
     for i, row in tqdm(tiles_gdf.iterrows(), desc='tiles loop', total=tiles_gdf.shape[0]):
         lon = row['geom'].centroid.x
         lat = row['geom'].centroid.y
         
         # extract current Fabdem tile
+        print(f"  - Копирование тайла...")
         zipfilename = row['zipfile_name']
         filename = row['file_name'].replace("N0", "N")
         zippath = os.path.join(fabdem_zip_path, zipfilename)
@@ -1054,6 +1057,7 @@ def prepare_slope_limitations(
         #     pass
         
         # Rescaling with improved options
+        print(f"  - Рескейлинг тайла FABDEM к ячейке {rescale_size}м...")
         output_rescale = None
         if rescale:
             scale = math.sqrt((111132.954 - (559.822 * math.cos(math.radians(2 * lat))) + 1.175 * math.cos(math.radians(4 * lat))) * (111132.954 * math.cos(math.radians(lat))))
@@ -1082,11 +1086,13 @@ def prepare_slope_limitations(
                 input_dem = gdal.Open(output_rescale)
                 # gdal.Warp(output_rescale, temp_ds, options=rescale_options)        
         
+        print(f"  - Вычисление уклона...")
         # Calculate slope
         # input_dem = None
         # input_dem = gdal.Open(output_rescale)        
         output_slope = os.path.join(fabdemdir, filename.replace('.tif', '_slope.tif'))
         if not use_wbw:
+            print(f"  - Использую GDAL для расчета уклона...")
             if input_dem is None:
                 print(f"Error: Could not open {os.path.join(fabdemdir, filename)}")
             else:
@@ -1104,6 +1110,7 @@ def prepare_slope_limitations(
                 # print(f"Slope calculated and saved to {output_slope}")
                 pass
         else:
+            print(f"  - Использую WhiteboxTools для расчета уклона...")
             # Use WhiteboxTools to calculate geodesic slope
             # Create environment
             wbe = wbt.WbEnvironment()
@@ -1120,6 +1127,7 @@ def prepare_slope_limitations(
             
         
         # Reclass slope
+        print(f"  - Реклассификация уклона...")
         output_slope_reclass = os.path.join(fabdemdir, filename.replace('.tif', '_slope_reclass.tif'))
         calc_expression = f"(A>={slope_threshold})*1"
         ds = gdal_calc.Calc(calc_expression, A=output_slope, outfile=output_slope_reclass, overwrite=True)
@@ -1127,6 +1135,7 @@ def prepare_slope_limitations(
         
         # Vectorize reclassed slope
         # https://www.google.com/search?q=python+rasterio+polygonize&sca_esv=7550878c098e0420&ei=AqK5aIbtPLqbwPAPxvCE6A8&ved=0ahUKEwiG9ujCqL-PAxW6DRAIHUY4Af0Q4dUDCBA&uact=5&oq=python+rasterio+polygonize&gs_lp=Egxnd3Mtd2l6LXNlcnAiGnB5dGhvbiByYXN0ZXJpbyBwb2x5Z29uaXplMgUQABjvBTIFEAAY7wUyBRAAGO8FSMUYUPQGWMIRcAF4AZABAJgBhwGgAbIEqgEDNy4xuAEDyAEA-AEBmAIIoALCA8ICChAAGLADGNYEGEfCAggQABgHGAgYHsICCBAAGIAEGKIEwgILEAAYgAQYhgMYigXCAgYQABgIGB6YAwCIBgGQBgiSBwE4oAfaFrIHATe4B7kDwgcFMC43LjHIBxM&sclient=gws-wiz-serp
+        print(f"  - Векторизация уклона...")
         with rasterio.open(output_slope_reclass) as src:
             image = src.read(1)
             transform = src.transform
@@ -1144,6 +1153,7 @@ def prepare_slope_limitations(
             gdf = gdf.set_crs(crs)
             gdf = gdf.to_crs('EPSG:4326')
             # add current vector data to final geodataframe
+            print(f"  - Добавление полигонов уклона в итоговый слой...")
             if i == 0:
                 final_gdf = gdf                
             else:
@@ -1155,6 +1165,7 @@ def prepare_slope_limitations(
             pass
         pass
         # Delete intermediate rasters
+        print(f"  - Удаление промежуточных файлов...")
         for fl in [
             output_slope, 
             output_slope_reclass, 
@@ -1168,14 +1179,16 @@ def prepare_slope_limitations(
                 print(err)
     if not final_gdf.empty:
         # Clip result by region and save to output
+        print(f"  - Обрезка итогового слоя по региону...")
         final_gdf = final_gdf.clip(region_gdf)
         region_shortname = get_region_shortname(region)
+        print(f"  - Сохранение итогового слоя уклона result/{region_shortname}_limitations.gpkg/{region_shortname}_{str(rescale_size)}m_sl_more_{str(slope_threshold)}_vector...")
         final_gdf.to_file(
             # 'result/slope_limitations.gpkg', 
             f"result/{region_shortname}_limitations.gpkg", 
             layer=f"{region_shortname}_{str(rescale_size)}m_sl_more_{str(slope_threshold)}_vector"
             )
-        
+        print(f"- Вычисление ограничений по уклону рельефа для региона {region} завершено успешно!")
         return final_gdf
     return None
 
@@ -1491,13 +1504,14 @@ def belt_vectorize_lulc(
     lulc_link='lulc/S2LULC_10m_LAEA_48_202507081046.tif'
 ):
     ######################LULC######################
-    print("vectorizing LULC raster...")
+    print("- Начинаю векторизацию растра Land Use Land Cover...")
     current_dir = os.getcwd()
     region_shortname = get_region_shortname(region)
     if region_shortname is None:
         region_shortname = "region"
 
     # Открыть растр LULC и векторизовать его в GeoDataFrame
+    print(f"  - Открываю исходный растр {lulc_link}...")
     try:
         with rasterio.open(lulc_link) as src:
             band = src.read(1)
@@ -1509,6 +1523,7 @@ def belt_vectorize_lulc(
 
             shapes_iter = rasterio.features.shapes(band, mask=mask, transform=src.transform)
             records = []
+            print("  - Векторизация растра...")
             for geom, value in shapes_iter:
                 if geom is None:
                     continue
@@ -1529,6 +1544,7 @@ def belt_vectorize_lulc(
         raise RuntimeError(f"Failed to open or vectorize raster '{lulc_link}': {e}")
     
     # Дополнительно: создать новый растр lulc_meadows.tif, где пиксели со значением 3 -> 1, остальные -> NoData
+    print("  - Создание растра lulc_meadows.tif с маской лугов...")
     try:
         with rasterio.open(lulc_link) as src_re:
             band = src_re.read(1)
@@ -1546,6 +1562,7 @@ def belt_vectorize_lulc(
 
             out_raster_path = os.path.join(current_dir, 'lulc', 'lulc_meadows.tif')
             out_dir = os.path.dirname(out_raster_path)
+            print(f"  - Сохранение растра {out_raster_path}...")
             if out_dir and not os.path.isdir(out_dir):
                 os.makedirs(out_dir, exist_ok=True)
 
@@ -1554,10 +1571,11 @@ def belt_vectorize_lulc(
     except Exception as e:
         raise RuntimeError(f"Failed to create 'lulc_meadows.tif' from '{lulc_link}': {e}")
 
-    # Добавить в lulc_gdc поля area_ha (float, геодезическая площадь) и name (text 50),
+    # Добавить в lulc_gdf поля area_ha (float, геодезическая площадь) и name (text 50),
     # заполнить name по value и сохранить в luls.gpkg
     try:
         # Геодезическая площадь в гектарах с использованием эллипсоида WGS84
+        print("  - Вычисление геодезической площади полигонов в векторизованном растре...")
         try:
             gdf_wgs = lulc_gdf.to_crs(4326)
         except Exception:
@@ -1576,6 +1594,7 @@ def belt_vectorize_lulc(
         lulc_gdf['area_ha'] = pd.to_numeric(areas_ha, errors='coerce')
 
         # Классифицированное имя по значению
+        print("  - Классификация полигонов LULC...")
         value_to_name = {
             1: 'water',
             2: 'forest',
@@ -1588,6 +1607,7 @@ def belt_vectorize_lulc(
         lulc_gdf['name'] = lulc_gdf['name'].astype('string').str.slice(0, 50)
 
         # Разбить на 5 GeoDataFrame по значению поля 'name'
+        print("  - Разбиение полигонов LULC на 5 слоев...")
         water_gdf = lulc_gdf[lulc_gdf['name'] == 'water'].copy()
         forest_gdf = lulc_gdf[lulc_gdf['name'] == 'forest'].copy()
         meadow_gdf = lulc_gdf[lulc_gdf['name'] == 'meadow'].copy()
@@ -1599,7 +1619,7 @@ def belt_vectorize_lulc(
         meadow_gdf = meadow_gdf.to_crs(4326)
         arable_gdf = arable_gdf.to_crs(4326)
         build_gdf = build_gdf.to_crs(4326)
-
+        print(f"- Векторизация растра Land Use Land Cover для региона {region} завершена успешно!")
         return {
             'water_gdf': water_gdf,
             'forest_gdf': forest_gdf,
@@ -1616,7 +1636,7 @@ def belt_calculate_forest_buffer(
     forest_gdf=None,
     buffer_distance=50
 ):
-    print("calculating buffer around forests from LULC...")
+    print("- Начинаю построение буфера вокруг полигонов лесов...")
     region_shortname = get_region_shortname(region)
     if region_shortname is None:
         region_shortname = "region"
@@ -1624,9 +1644,11 @@ def belt_calculate_forest_buffer(
     if not forest_gdf.empty:
         try:
             # Убрать небольшие полигоны
+            print("  - Фильтрация полигонов площадью менее 0.1 га...")
             forest_gdf = forest_gdf[forest_gdf['area_ha'] > 0.1].copy()
             # Буферы считаем в геодезическом режиме: сначала в WGS84, затем используем calculate_geod_buffers
             forest_wgs = forest_gdf.to_crs(4326)
+            print("  - Вычисление геодезических буферов...")
             buffer_geom = calculate_geod_buffers(
                 forest_wgs, 
                 buffer_crs='laea', 
@@ -1647,12 +1669,13 @@ def belt_calculate_forest_buffer(
                 forest_50m = forest_50m.explode().reset_index(drop=True)
             # Save to GPKG as 'forest_50m'
             # region_shortname = get_region_shortname(region)
-
+            print(f"  - Сохранение результата в слой  result/{region_shortname}_limitations.gpkg/{region_shortname}_forest_{str(buffer_distance)}m...")
             forest_50m.to_file(
                 f"result/{region_shortname}_limitations.gpkg", 
                 layer=f'{region_shortname}_forest_{str(buffer_distance)}m', 
                 driver='GPKG'
                 )
+            print(f"- Построение буфера вокруг полигонов лесов для региона {region} завершено успешно!")
             return forest_50m
         except Exception as e:
             raise RuntimeError(f"Failed to build/save forest_50m buffers: {e}")
@@ -1666,7 +1689,7 @@ def belt_merge_limitation_full(
     railway_OSM_buf=None,   # geodataframe derived from prepare_railway_limitations
     forest_50m=None,   # geodataframe derived from calculate_forest_buffer
 ):
-    print("calculating full limitations...")
+    print(f"- Начинаю расчет полных ограничений на регион {region}...")
     ###################объединение ограничений########################
     if limitation_all is not None and road_OSM_cover_buf is not None and forest_50m is not None and railway_OSM_buf is not None:
         ############################################
@@ -1679,6 +1702,7 @@ def belt_merge_limitation_full(
             ("forest_50m", forest_50m)
         ]
         parts = []
+        print("  - Объединение ограничений...")
         for name, gdf in src_gdfs:
             if gdf is None or gdf.empty:
                 continue
@@ -1732,6 +1756,7 @@ def belt_merge_limitation_full(
                 limitation_full = limitation_full.explode().reset_index(drop=True)
             # Reset index and regenerate sequential gid
             limitation_full = limitation_full.reset_index(drop=True)
+            print(f"  - Присвоение уникальных идентификаторов...")
             limitation_full['gid'] = range(1, len(limitation_full) + 1)
             # Keep only gid and geom
             limitation_full = limitation_full[['gid', 'geometry']]
@@ -1739,6 +1764,7 @@ def belt_merge_limitation_full(
             limitation_full = limitation_full.explode()
             
             # Split by 6' grid (0.1 degree) to further subdivide geometries
+            print(f"  - Разбиение итогового полигона на тайлы...")
             step_deg = 0.1  # 6 arc-minutes
             minx, miny, maxx, maxy = limitation_full.total_bounds
             # Snap bounds to grid
@@ -1766,6 +1792,7 @@ def belt_merge_limitation_full(
             limitation_full = split_gdf
             
             # Save merged limitations
+            print(f"  - Сохранение результата в слой result/{region_shortname}_limitations.gpkg/{region_shortname}_limitation_full...")
             region_shortname = get_region_shortname(region)
             if region_shortname is None:
                 region_shortname = "region"
@@ -1773,7 +1800,9 @@ def belt_merge_limitation_full(
                 f"result/{region_shortname}_limitations.gpkg",
                 layer=f"{region_shortname}_limitation_full"
             )
+            print(f"- Расчет полных ограничений на регион {region} завершен успешно!")
             return limitation_full
+    print(f"- Расчет полных ограничений на регион {region} завершен с ошибкой!")
     return False
 
 
@@ -1783,15 +1812,17 @@ def belt_calculate_arable_buffer(
     arable_area_ha_threshold=10,
     arable_buffer_distance=20,
 ):
-    print("calculating buffer around arable from LULC...")
+    print("- Начинаю расчет буферов вокруг пашни...")
     region_shortname = get_region_shortname(region)
     if region_shortname is None:
         region_shortname = "region"
     ###############arable###########################
     try:
+        print(f"  - Фильтрация участков с площадью меньше {arable_area_ha_threshold} га...")
         arable_gdf = arable_gdf[arable_gdf['area_ha'] > arable_area_ha_threshold].copy()
         # arable_gdf = arable_gdf.to_crs(4326)
         if not arable_gdf.empty:
+            print(f"  - Рассчет буферов вокруг участков...")
             arable_buffers_geom = calculate_geod_buffers(
                 i_gdf=arable_gdf,
                 buffer_crs='utm',
@@ -1808,11 +1839,12 @@ def belt_calculate_arable_buffer(
             arable_buffer = arable_buffer[~arable_buffer.geometry.is_empty].copy()
         else:
             arable_buffer = gpd.GeoDataFrame(columns=arable_gdf.columns, geometry=arable_gdf.geometry.name, crs=arable_gdf.crs)
-        
+        print(f"  - Сохранение результата в слой result/{region_shortname}_limitations.gpkg/{region_shortname}_arable_buffer...")
         arable_buffer.to_file(
             f"result/{region_shortname}_limitations.gpkg",
             layer=f"{region_shortname}_arable_buffer"
         )
+        print(f"- Расчет буферов вокруг пашни завершен успешно!")
         return arable_buffer
     except Exception as e:
         raise RuntimeError(f"Failed to calculate arable buffer: {e}")
@@ -2268,7 +2300,7 @@ def belt_calculate_forestation(
     meadows_raster='lulc/lulc_meadows.tif',
     use_wbt=True
 ):
-    print(f"#######{region} - РАСЧЕТ ЗОН СПЛОШНОГО ОБЛЕСЕНИЯ#######")
+    print(f"- Начинаю расчет зон сплошного облесения для региона {region}...")
     region_shortname = get_region_shortname(region)
     if region_shortname is None:
         region_shortname = "region"
@@ -2634,7 +2666,7 @@ def belt_calculate_forestation(
         # Erase main_belt and gully_belt from forestation_gdf
         print(f" - удаление областей ограничений из растра forestation...")
         for cut in [gully_belt, main_belt, limitation, road_OSM_cover_buf, railway_osm_buf]:
-            if cut is not None and not cut.empty:
+            if cut is not None and not cut.empty and forestation_gdf is not None and not forestation_gdf.empty:
                 # Ensure both GeoDataFrames have the same CRS
                 if forestation_gdf.crs != cut.crs:
                     cut_reprojected = cut.to_crs(forestation_gdf.crs)
@@ -2713,7 +2745,7 @@ def belt_calculate_forestation(
             os.path.join(current_dir, 'result', f'{region_shortname}_limitations.gpkg'),
             layer=f'{region_shortname}_forestation'
         )
-    print(f"#######{region} - РАСЧЕТ ЗОН СПЛОШНОГО ОБЛЕСЕНИЯ ВЫПОЛНЕН#######")
+    print(f"- Расчет зон сплошного облесения для региона {region} выпонен успешно!")
     return final_gdf
 
 
@@ -4314,10 +4346,10 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_lulc.gpkg', 
     #     layer='Lipetskaya_lulc_forest'
     #     )
-    build_gdf = gpd.read_file(
-        'result/Tatarstan_lulc.gpkg', 
-        layer='Tatarstan_lulc_build'
-        )
+    # build_gdf = gpd.read_file(
+    #     'result/Tatarstan_lulc.gpkg', 
+    #     layer='Tatarstan_lulc_build'
+    #     )
     # limitation_all = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_all_limitations'
@@ -4326,10 +4358,10 @@ if __name__ == '__main__':
         'result/Tatarstan_limitations.gpkg', 
         layer='Tatarstan_all_limitations'
         )
-    # road_OSM_cover_buf = gpd.read_file(
-    #     'result/Lipetskaya_limitations.gpkg', 
-    #     layer='Lipetskaya_road_OSM_cover_buf'
-    #     )
+    road_OSM_cover_buf = gpd.read_file(
+        'result/Tatarstan_limitations.gpkg', 
+        layer='Tatarstan_road_OSM_cover_buf'
+        )
     # railway_OSM_buf = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_railway_OSM_buf'
@@ -4342,10 +4374,10 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_forest_50m'
     #     )
-    forest_50m = gpd.read_file(
-        'result/Tatarstan_limitations.gpkg', 
-        layer='Tatarstan_forest_50m'
-        )
+    # forest_50m = gpd.read_file(
+    #     'result/Tatarstan_limitations.gpkg', 
+    #     layer='Tatarstan_forest_50m'
+    #     )
     # arable_gdf = gpd.read_file(
     #     'result/Lipetskaya_lulc_sample.gpkg', 
     #     layer='Lipetskaya_lulc_arable'
@@ -4379,18 +4411,18 @@ if __name__ == '__main__':
         'result/Tatarstan_Limitations.gpkg', 
         layer='Tatarstan_gully_belt'
         )
-    forestation = gpd.read_file(
-        'result/Tatarstan_Limitations.gpkg', 
-        layer='Tatarstan_forestation'
-        )
-    secondary_belt = gpd.read_file(
-        'result/Tatarstan_Limitations.gpkg', 
-        layer='Tatarstan_secondary_belt'
-        )
-    road_belt = gpd.read_file(
-        'result/Tatarstan_Limitations.gpkg', 
-        layer='Tatarstan_road_belt'
-        )
+    # forestation = gpd.read_file(
+    #     'result/Tatarstan_Limitations.gpkg', 
+    #     layer='Tatarstan_forestation'
+    #     )
+    # secondary_belt = gpd.read_file(
+    #     'result/Tatarstan_Limitations.gpkg', 
+    #     layer='Tatarstan_secondary_belt'
+    #     )
+    # road_belt = gpd.read_file(
+    #     'result/Tatarstan_Limitations.gpkg', 
+    #     layer='Tatarstan_road_belt'
+    #     )
 
 
     region_shortname = get_region_shortname('Липецкая область')
@@ -4492,25 +4524,25 @@ if __name__ == '__main__':
     #     smooth=True
     # )
 
-    # forestation = belt_calculate_forestation(
-    #     region='Липецкая область',
-    #     main_belt=main_belt, 
-    #     gully_belt=gully_belt, 
-    #     limitation=limitation_all,
-    #     road_OSM_cover_buf=road_OSM_cover_buf,
-    #     railway_osm_buf=railway_OSM_buf,
-    #     postgres_info='.secret/.gdcdb',
-    #     regions_table='admin.hse_russia_regions', 
-    #     region_buf_size=0,
-    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-    #     meadows_raster='lulc/lulc_meadows.tif',
-    #     tpi_threshold=-2,
-    #     tpi_window_size_m=2000,
-    #     slope_threshold=12,
-    #     use_wbt=True
-    # )
-    # pass
+    forestation = belt_calculate_forestation(
+        region='Республика Татарстан (Татарстан)',
+        main_belt=main_belt, 
+        gully_belt=gully_belt, 
+        limitation=limitation_all,
+        road_OSM_cover_buf=road_OSM_cover_buf,
+        railway_osm_buf=railway_OSM_buf,
+        postgres_info='.secret/.gdcdb',
+        regions_table='admin.hse_russia_regions', 
+        region_buf_size=0,
+        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+        meadows_raster='lulc/lulc_meadows.tif',
+        tpi_threshold=-2,
+        tpi_window_size_m=2000,
+        slope_threshold=12,
+        use_wbt=True
+    )
+    pass
 
     
     # secondary_belt = belt_calculate_secondary_belt(
@@ -4544,17 +4576,17 @@ if __name__ == '__main__':
     #     build_gdf=build_gdf
     # )
 
-    forest_belt_nature = belt_forest_belt_nature(
-        postgres_info='.secret/.gdcdb',
-        regions_table='sber.municipal_districts_newregion',
-        region='Республика Татарстан (Татарстан)', 
-        main_belt_gdf=main_belt,
-        secondary_belt_gdf=secondary_belt,
-        gully_belt_gdf=gully_belt,
-        forestation_gdf=forestation,
-        road_belt_gdf=road_belt,
-        region_buf_size=0,
-    )
+    # forest_belt_nature = belt_forest_belt_nature(
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='sber.municipal_districts_newregion',
+    #     region='Республика Татарстан (Татарстан)', 
+    #     main_belt_gdf=main_belt,
+    #     secondary_belt_gdf=secondary_belt,
+    #     gully_belt_gdf=gully_belt,
+    #     forestation_gdf=forestation,
+    #     road_belt_gdf=road_belt,
+    #     region_buf_size=0,
+    # )
 
     # calculate_forest_belt(
     #     region='Республика Татарстан (Татарстан)',
