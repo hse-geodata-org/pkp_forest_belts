@@ -3465,14 +3465,123 @@ def belt_forest_belt_nature(
 def belt_forest_belt_final(
     postgres_info='.secret/.gdcdb',
     region='Липецкая область', 
-    regions_table='admin.hse_russia_regions',
-    region_buf_size=0,
+    # regions_table='admin.hse_russia_regions',
+    # region_buf_size=0,
     forest_belt_nature: gpd.GeoDataFrame = None,
-    municipal_for_belt: str = None,
-    RF_vegetation_zone_30mln: str = None,
-    continentalnost_index: str = None
+    municipal_for_belt_table: str='sber.municipal_districts_newregion',
+    RF_vegetation_zone_30mln_table: str='g_of_russia.rf_vegetation_zone_30mln_v',
+    continentalnost_index_table: str='climate.pkp_continentalnost_index'
 ):
+    print(f"- Начинаю расчет итоговых лесополос для региона {region}...")
+    region_shortname = get_region_shortname(region)
+    if region_shortname is None:
+        region_shortname = "region"
+    print(f"  - Выборка данных из БД...")
+    try:
+        with open(postgres_info, encoding='utf-8') as f:
+            pg = json.load(f)
+    except:
+        raise
+    try:
+        engine = sqlalchemy.create_engine(
+            f"postgresql+psycopg2://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{pg['database']}",
+            connect_args={
+                "sslmode": "verify-full",
+                "target_session_attrs": "read-write"
+            },
+        )
+    except:
+        raise
+    
+    sql = f"select * from {municipal_for_belt_table} where '{region}' ~* region_name or region_name ~* '{region}';"
     pass
+    with engine.connect() as conn:
+        municipal_for_belt = gpd.read_postgis(sql, conn)
+    
+    sql = f"select gid, veg_id, geom from {RF_vegetation_zone_30mln_table};"
+    pass
+    with engine.connect() as conn:
+        RF_vegetation_zone_30mln = gpd.read_postgis(sql, conn)
+    RF_vegetation_zone_30mln = RF_vegetation_zone_30mln.dissolve(by='veg_id').explode().reset_index()
+    
+    sql = f"select gid, ic, geom from {continentalnost_index_table};"
+    pass
+    with engine.connect() as conn:
+        continentalnost_index = gpd.read_postgis(sql, conn)
+    pass
+    
+    print(f"  - Пересечение лесополос с границами муниципальных районов...")
+    forest_belt_adm = gpd.overlay(forest_belt_nature, municipal_for_belt, how='identity')
+    # if forest_belt_adm is not None and not forest_belt_adm.empty:
+    #     forest_belt_adm.to_file(
+    #         f"result/{region_shortname}_limitations.gpkg", 
+    #         layer=f"{region_shortname}_forest_belt_adm"
+    #     )
+    pass
+    print(f"  - Пересечение лесополос с границами природных зон...")
+    forest_belt_adm_veg = gpd.overlay(forest_belt_adm, RF_vegetation_zone_30mln, how='identity')
+    # if forest_belt_adm_veg is not None and not forest_belt_adm_veg.empty:
+    #     forest_belt_adm_veg.to_file(
+    #         f"result/{region_shortname}_limitations.gpkg", 
+    #         layer=f"{region_shortname}_forest_belt_adm_veg"
+    #     )
+    pass
+    print(f"  - Пересечение лесополос с индексом континентальности...")
+    forest_belt_adm_veg_ic = gpd.overlay(forest_belt_adm_veg, continentalnost_index, how='identity')
+    # if forest_belt_adm_veg_ic is not None and not forest_belt_adm_veg_ic.empty:
+    #     forest_belt_adm_veg_ic.to_file(
+    #         f"result/{region_shortname}_limitations.gpkg", 
+    #         layer=f"{region_shortname}_forest_belt_adm_veg_ic"
+    #     )
+    pass
+    forest_belt_adm_veg_ic = forest_belt_adm_veg_ic.explode()
+    print(f"  - Удаление ошибок геометрии...")
+    forest_belt_final = forest_belt_adm_veg_ic.copy()
+    forest_belt_final.geometry = forest_belt_final.geometry.apply(lambda x: shapely.make_valid(x))
+    print(f"  - Вычисление площадей и удаление объектов меньше 0.2 га...")
+    geod = Geod(ellps='WGS84')
+    forest_belt_final['area_ha'] = [abs(geod.geometry_area_perimeter(g)[0]) / 10000 for g in forest_belt_final.geometry]
+    forest_belt_final = forest_belt_final[forest_belt_final['area_ha'] > 0.2].copy()
+    print(f"  - Вычисление полей belt_fid, reg_id, reg_name, mun_id, mun_name, ic, veg_id, gid...")
+    # Add belt_fid field with integer sequence
+    forest_belt_final['belt_fid'] = np.arange(1, len(forest_belt_final) + 1, dtype=int)
+
+    # Extract region and municipal IDs with error handling
+    try:
+        forest_belt_final['reg_id'] = [int(x.split('-')[0]) if isinstance(x, str) and '-' in x else None for x in forest_belt_final['oktmo']]
+    except Exception:
+        forest_belt_final['reg_id'] = None    
+    try:
+        forest_belt_final['reg_name'] = forest_belt_final['region_name']
+    except Exception:
+        forest_belt_final['reg_name'] = None    
+    try:
+        forest_belt_final['mun_id'] = [int(x.split('-')[1]) if isinstance(x, str) and '-' in x and len(x.split('-')) > 1 else None for x in forest_belt_final['oktmo']]
+    except Exception:
+        forest_belt_final['mun_id'] = None    
+    try:
+        forest_belt_final['mun_name'] = forest_belt_final['municipal_district_name']
+    except Exception:
+        forest_belt_final['mun_name'] = None
+    
+    print(f"  - Удаление лишних полей...")
+    # Keep only specified fields
+    keep_fields = ['belt_id', 'belt_fid', 'type_id', 'type_name', 'area_ha', 'reg_id', 'reg_name', 'mun_id', 'mun_name', 'ic', 'veg_id', 'gid', 'geom', 'geometry']
+    existing_fields = [f for f in keep_fields if f in forest_belt_final.columns]
+    forest_belt_final = forest_belt_final[existing_fields]
+    
+    if forest_belt_final is not None and not forest_belt_final.empty:
+        print(f"  - Сохранение результата в слой result/{region_shortname}_limitations.gpkg/{region_shortname}_forest_belt_final...")
+        forest_belt_final.to_file(
+            f"result/{region_shortname}_limitations.gpkg", 
+            layer=f"{region_shortname}_forest_belt_final"
+        )
+        print(f"- Расчет итоговых лесополос для региона {region} выполнен успешно!")
+        return forest_belt_final
+    print(f"  - Результат не сохранен, т.к. он пустой.")
+    return None
+    
+
 
 
 def prepare_limitations(
@@ -3836,6 +3945,8 @@ def calculate_forest_belt(
     sber_index_table: str = 'sber.municipal_districts_newregion',
     region_buf_size: int = 5000,
     road_table: str = 'osm.gis_osm_roads_free',
+    RF_vegetation_zone_30mln_table = 'g_of_russia.rf_vegetation_zone_30mln_v',
+    continentalnost_index_table='climate.pkp_continentalnost_index',
     road_buf_size_rule_lim: dict = {
         "fclass  in  ('primary', 'primary_link')": 80,
         "fclass in ('motorway' , 'motorway_link')": 80,
@@ -4030,7 +4141,17 @@ def calculate_forest_belt(
         region_buf_size=region_buf_size
     )
 
-    return main_belt, gully_belt, forestation, secondary_belt, road_belt, forest_belt_nature
+    ################Итоговый слой лесополос 2################
+    forest_belt_final = belt_forest_belt_final(
+        postgres_info=postgres_info,
+        region=region, 
+        forest_belt_nature=forest_belt_nature,
+        municipal_for_belt_table=sber_index_table,
+        RF_vegetation_zone_30mln_table=RF_vegetation_zone_30mln_table,
+        continentalnost_index_table=continentalnost_index_table
+    )
+
+    return main_belt, gully_belt, forestation, secondary_belt, road_belt, forest_belt_nature, forest_belt_final
 
 def main():
     """
@@ -4372,22 +4493,22 @@ if __name__ == '__main__':
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_all_limitations'
     #     )
-    limitation_all = gpd.read_file(
-        'result/Tatarstan_limitations.gpkg', 
-        layer='Tatarstan_all_limitations'
-        )
-    road_OSM_cover_buf = gpd.read_file(
-        'result/Tatarstan_limitations.gpkg', 
-        layer='Tatarstan_road_OSM_cover_buf'
-        )
+    # limitation_all = gpd.read_file(
+    #     'result/Tatarstan_limitations.gpkg', 
+    #     layer='Tatarstan_all_limitations'
+    #     )
+    # road_OSM_cover_buf = gpd.read_file(
+    #     'result/Tatarstan_limitations.gpkg', 
+    #     layer='Tatarstan_road_OSM_cover_buf'
+    #     )
     # railway_OSM_buf = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_railway_OSM_buf'
     #     )
-    railway_OSM_buf = gpd.read_file(
-        'result/Tatarstan_limitations.gpkg', 
-        layer='Tatarstan_railway_OSM_buf'
-        )
+    # railway_OSM_buf = gpd.read_file(
+    #     'result/Tatarstan_limitations.gpkg', 
+    #     layer='Tatarstan_railway_OSM_buf'
+    #     )
     # forest_50m = gpd.read_file(
     #     'result/Lipetskaya_limitations.gpkg', 
     #     layer='Lipetskaya_forest_50m'
@@ -4421,14 +4542,14 @@ if __name__ == '__main__':
     #     layer='Lipetskaya_belt_line'
     #     )
 
-    main_belt = gpd.read_file(
-        'result/Tatarstan_Limitations.gpkg', 
-        layer='Tatarstan_main_belt'
-        )
-    gully_belt = gpd.read_file(
-        'result/Tatarstan_Limitations.gpkg', 
-        layer='Tatarstan_gully_belt'
-        )
+    # main_belt = gpd.read_file(
+    #     'result/Tatarstan_Limitations.gpkg', 
+    #     layer='Tatarstan_main_belt'
+    #     )
+    # gully_belt = gpd.read_file(
+    #     'result/Tatarstan_Limitations.gpkg', 
+    #     layer='Tatarstan_gully_belt'
+    #     )
     # forestation = gpd.read_file(
     #     'result/Tatarstan_Limitations.gpkg', 
     #     layer='Tatarstan_forestation'
@@ -4441,6 +4562,10 @@ if __name__ == '__main__':
     #     'result/Tatarstan_Limitations.gpkg', 
     #     layer='Tatarstan_road_belt'
     #     )
+    forest_belt_nature = gpd.read_file(
+        'result/Lipetskaya_Limitations.gpkg', 
+        layer='Lipetskaya_forest_belt_nature'
+        )
 
 
     region_shortname = get_region_shortname('Липецкая область')
@@ -4542,25 +4667,25 @@ if __name__ == '__main__':
     #     smooth=True
     # )
 
-    forestation = belt_calculate_forestation(
-        region='Республика Татарстан (Татарстан)',
-        main_belt=main_belt, 
-        gully_belt=gully_belt, 
-        limitation=limitation_all,
-        road_OSM_cover_buf=road_OSM_cover_buf,
-        railway_osm_buf=railway_OSM_buf,
-        postgres_info='.secret/.gdcdb',
-        regions_table='admin.hse_russia_regions', 
-        region_buf_size=0,
-        fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
-        fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
-        meadows_raster='lulc/lulc_meadows.tif',
-        tpi_threshold=-2,
-        tpi_window_size_m=2000,
-        slope_threshold=12,
-        use_wbt=True
-    )
-    pass
+    # forestation = belt_calculate_forestation(
+    #     region='Республика Татарстан (Татарстан)',
+    #     main_belt=main_belt, 
+    #     gully_belt=gully_belt, 
+    #     limitation=limitation_all,
+    #     road_OSM_cover_buf=road_OSM_cover_buf,
+    #     railway_osm_buf=railway_OSM_buf,
+    #     postgres_info='.secret/.gdcdb',
+    #     regions_table='admin.hse_russia_regions', 
+    #     region_buf_size=0,
+    #     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
+    #     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+    #     meadows_raster='lulc/lulc_meadows.tif',
+    #     tpi_threshold=-2,
+    #     tpi_window_size_m=2000,
+    #     slope_threshold=12,
+    #     use_wbt=True
+    # )
+    # pass
 
     
     # secondary_belt = belt_calculate_secondary_belt(
@@ -4605,6 +4730,16 @@ if __name__ == '__main__':
     #     road_belt_gdf=road_belt,
     #     region_buf_size=0,
     # )
+
+    forest_belt_final = belt_forest_belt_final(
+        postgres_info='.secret/.gdcdb',
+        region='Липецкая область', 
+        forest_belt_nature=forest_belt_nature,
+        municipal_for_belt_table='sber.municipal_districts_newregion',
+        RF_vegetation_zone_30mln_table='g_of_russia.rf_vegetation_zone_30mln_v',
+        continentalnost_index_table='climate.pkp_continentalnost_index'
+    )
+    pass
 
     # calculate_forest_belt(
     #     region='Республика Татарстан (Татарстан)',
