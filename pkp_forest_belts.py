@@ -2259,6 +2259,16 @@ def belt_classify_main_gulch(
     cols = ['border_ratio', 'length_border_full', 'length_border_arable']
     main_belt = main_belt.drop(columns=cols)
     gully_belt = gully_belt.drop(columns=cols)
+    
+    # Calculate geodesic area in hectares using pyproj.Geod
+    geod = Geod(ellps='WGS84')
+    main_belt['area_ha'] = [abs(geod.geometry_area_perimeter(g)[0]) / 10000 for g in main_belt.geometry]
+    gully_belt['area_ha'] = [abs(geod.geometry_area_perimeter(g)[0]) / 10000 for g in gully_belt.geometry]
+    
+    # Remove objects with area less than 0.2 ha
+    main_belt = main_belt[main_belt['area_ha'] > 0.1]
+    gully_belt = gully_belt[gully_belt['area_ha'] > 0.2]
+    
     try:
         out_path = os.path.join("result", f"{region_shortname}_limitations.gpkg")
         layer_name = f"{region_shortname}_main_belt"
@@ -2897,6 +2907,14 @@ def belt_calculate_secondary_belt(
     )
     secondary_belt_gdf_centrl = secondary_belt_gdf_centrl.copy().set_geometry(secondary_belt_centrl_buf)
     secondary_belt_gdf_centrl = secondary_belt_gdf_centrl.dissolve().explode()
+    
+    # Calculate geodesic area in hectares using pyproj.Geod
+    geod = Geod(ellps='WGS84')
+    secondary_belt_gdf_centrl['area_ha'] = [abs(geod.geometry_area_perimeter(g)[0]) / 10000 for g in secondary_belt_gdf_centrl.geometry]
+    
+    # Remove objects with area less than 0.1 ha
+    secondary_belt_gdf_centrl = secondary_belt_gdf_centrl[secondary_belt_gdf_centrl['area_ha'] > 0.1]
+    
     print(f"  - сохранение второстепенных лесополос в слой {region_shortname}_secondary_belt...")
     secondary_belt_gdf_centrl.to_file(
             os.path.join(current_dir, 'result', f'{region_shortname}_limitations.gpkg'),
