@@ -3726,7 +3726,7 @@ def prepare_limitations(
         считаются непригодными для размещения лесополос. По умолчанию 12.
     fabdem_zip_path : str, optional
         Путь к директории с ZIP-архивами тайлов FABDEM.
-        По умолчанию r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem".
+        По умолчанию r"\\\\172.21.204.20\\geodata\\_PROJECTS\\pkp\\vm0047_prod\\dem_fabdem".
     rescale_slope_raster : bool, optional
         Флаг необходимости пересэмплирования растра уклонов для уменьшения размера.
         По умолчанию True.
@@ -4009,7 +4009,7 @@ def calculate_forest_belt(
     fabdem_tiles_table: str = 'elevation.fabdem_v1_2_tiles',
     fabdem_zip_path: str = r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
     meadows_raster: str = 'lulc/lulc_meadows.tif',
-    tpi_threshold: int = 2,
+    tpi_threshold: int = -2,
     tpi_window_size_m: int = 2000,
     slope_threshold: int = 12,
     road_buf_size_rule_belt: dict = {
@@ -4234,7 +4234,19 @@ def main():
     # Subparser для prepare_limitations
     parser_prep = subparsers.add_parser(
         'prepare_limitations',
-        help='Подготовка комплексного слоя ограничений'
+        help='Подготовка комплексного слоя ограничений',
+        description='''
+Подготовка комплексного слоя ограничений для размещения защитных лесных насаждений.
+
+Функция агрегирует различные типы территориальных ограничений (водные объекты, 
+заболоченные территории, неподходящие почвы, крутые склоны, населенные пункты, 
+ООПТ и существующие леса) в единый векторный слой. Результирующий слой представляет 
+собой объединение всех зон, где размещение лесополос нецелесообразно или невозможно.
+
+Результат сохраняется в файл 'result/{region_shortname}_limitations.gpkg' 
+в слой '{region_shortname}_all_limitations'.
+        ''',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser_prep.add_argument(
         '--postgres-info',
@@ -4346,7 +4358,22 @@ def main():
     # Subparser для calculate_forest_belt
     parser_calc = subparsers.add_parser(
         'calculate_forest_belt',
-        help='Расчет защитных лесных насаждений'
+        help='Расчет защитных лесных насаждений',
+        description='''
+Расчет защитных лесных насаждений для указанного региона.
+
+Функция выполняет полный цикл расчета лесополос:
+1. Векторизация данных LULC (классификация земель)
+2. Расчет буферных зон вокруг пахотных земель
+3. Построение центральных линий для размещения лесополос
+4. Классификация лесополос на основные и прибалочные
+5. Определение зон сплошного облесения
+6. Расчет второстепенных и придорожных лесополос
+7. Формирование итоговых слоев с учетом природно-климатических условий
+
+Результаты сохраняются в файлы GeoPackage в директории 'result/'.
+        ''',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser_calc.add_argument(
         '--region',
@@ -4391,6 +4418,60 @@ def main():
         '--road-table',
         default='osm.gis_osm_roads_free',
         help='Полное имя таблицы с дорогами'
+    )
+    parser_calc.add_argument(
+        '--RF-vegetation-zone-30mln-table',
+        default='g_of_russia.rf_vegetation_zone_30mln_v',
+        help='Полное имя таблицы с зонами растительности РФ'
+    )
+    parser_calc.add_argument(
+        '--continentalnost-index-table',
+        default='climate.pkp_continentalnost_index',
+        help='Полное имя таблицы с индексом континентальности'
+    )
+    parser_calc.add_argument(
+        '--railway-table',
+        default='osm.gis_osm_railways_free',
+        help='Полное имя таблицы с железными дорогами'
+    )
+    parser_calc.add_argument(
+        '--railway-buf-size',
+        type=int,
+        default=100,
+        help='Размер буфера вокруг железных дорог в метрах'
+    )
+    parser_calc.add_argument(
+        '--fabdem-tiles-table',
+        default='elevation.fabdem_v1_2_tiles',
+        help='Полное имя таблицы с метаданными тайлов FABDEM'
+    )
+    parser_calc.add_argument(
+        '--fabdem-zip-path',
+        default=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
+        help='Путь к директории с ZIP-архивами тайлов FABDEM'
+    )
+    parser_calc.add_argument(
+        '--meadows-raster',
+        default='lulc/lulc_meadows.tif',
+        help='Путь к растру лугов'
+    )
+    parser_calc.add_argument(
+        '--tpi-threshold',
+        type=int,
+        default=-2,
+        help='Пороговое значение TPI (Topographic Position Index)'
+    )
+    parser_calc.add_argument(
+        '--tpi-window-size-m',
+        type=int,
+        default=2000,
+        help='Размер окна для расчета TPI в метрах'
+    )
+    parser_calc.add_argument(
+        '--slope-threshold',
+        type=float,
+        default=12,
+        help='Пороговое значение уклона в градусах'
     )
     
     args = parser.parse_args()
@@ -4443,7 +4524,17 @@ def main():
             regions_table=args.regions_table,
             sber_index_table=args.sber_index_table,
             region_buf_size=args.region_buf_size,
-            road_table=args.road_table
+            road_table=args.road_table,
+            RF_vegetation_zone_30mln_table=args.RF_vegetation_zone_30mln_table,
+            continentalnost_index_table=args.continentalnost_index_table,
+            railway_table=args.railway_table,
+            railway_buf_size=args.railway_buf_size,
+            fabdem_tiles_table=args.fabdem_tiles_table,
+            fabdem_zip_path=args.fabdem_zip_path,
+            meadows_raster=args.meadows_raster,
+            tpi_threshold=args.tpi_threshold,
+            tpi_window_size_m=args.tpi_window_size_m,
+            slope_threshold=args.slope_threshold
         )
         print("Расчет лесополос завершен")
     
@@ -4452,9 +4543,9 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
+    main()
     
-    current_dir = os.getcwd()
+    # current_dir = os.getcwd()
 
     # prepare_water_limitations(
     #     postgres_info='.secret/.gdcdb',
@@ -4591,36 +4682,36 @@ if __name__ == '__main__':
     #     layer='Lipetskaya_belt_line'
     #     )
 
-    main_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_main_belt'
-        )
-    gully_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_gully_belt'
-        )
-    forestation = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_forestation'
-        )
-    secondary_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_secondary_belt'
-        )
-    road_belt = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_road_belt'
-        )
-    forest_belt_nature = gpd.read_file(
-        'result/Lipetskaya_Limitations.gpkg', 
-        layer='Lipetskaya_forest_belt_nature'
-        )
+    # main_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_main_belt'
+    #     )
+    # gully_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_gully_belt'
+    #     )
+    # forestation = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_forestation'
+    #     )
+    # secondary_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_secondary_belt'
+    #     )
+    # road_belt = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_road_belt'
+    #     )
+    # forest_belt_nature = gpd.read_file(
+    #     'result/Lipetskaya_Limitations.gpkg', 
+    #     layer='Lipetskaya_forest_belt_nature'
+    #     )
 
 
-    region_shortname = get_region_shortname('Липецкая область')
-    if region_shortname is None:
-        region_shortname = "region"
-
+    # region_shortname = get_region_shortname('Липецкая область')
+    # if region_shortname is None:
+    #     region_shortname = "region"
+# 
     # lulc_gdfs = belt_vectorize_lulc(
     #         region='Липецкая область',
     #         lulc_link='lulc/S2LULC_10m_LAEA_48_202507081046_sample.tif',
@@ -4780,15 +4871,15 @@ if __name__ == '__main__':
     #     region_buf_size=0,
     # )
 
-    forest_belt_final = belt_forest_belt_final(
-        postgres_info='.secret/.gdcdb',
-        region='Липецкая область', 
-        forest_belt_nature=forest_belt_nature,
-        municipal_for_belt_table='sber.municipal_districts_newregion',
-        RF_vegetation_zone_30mln_table='g_of_russia.rf_vegetation_zone_30mln_v',
-        continentalnost_index_table='climate.pkp_continentalnost_index'
-    )
-    pass
+    # forest_belt_final = belt_forest_belt_final(
+    #     postgres_info='.secret/.gdcdb',
+    #     region='Липецкая область', 
+    #     forest_belt_nature=forest_belt_nature,
+    #     municipal_for_belt_table='sber.municipal_districts_newregion',
+    #     RF_vegetation_zone_30mln_table='g_of_russia.rf_vegetation_zone_30mln_v',
+    #     continentalnost_index_table='climate.pkp_continentalnost_index'
+    # )
+    # pass
 
     # calculate_forest_belt(
     #     region='Республика Татарстан (Татарстан)',
