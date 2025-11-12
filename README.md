@@ -27,12 +27,48 @@
 ### Установка
 
 ```bash
+# Клонирование репозитория
 git clone <repository-url>
 cd pkp_forest_belts
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\activate  # Windows
-pip install -r requirements.txt
+
+# Установка uv (если еще не установлен)
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+# Linux/Mac
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Синхронизация окружения (создает .venv и устанавливает все зависимости)
+uv sync
+
+# Активация окружения (опционально, uv run работает без активации)
+# Linux/Mac
+source .venv/bin/activate
+# Windows
+.venv\Scripts\activate
+```
+
+### Запуск скрипта
+
+С использованием `uv run` (рекомендуется, не требует активации окружения):
+
+```bash
+# Просмотр справки
+uv run pkp_forest_belts.py --help
+
+# Подготовка ограничений
+uv run pkp_forest_belts.py prepare_limitations --help
+uv run pkp_forest_belts.py prepare_limitations --region "Липецкая область"
+
+# Расчет лесополос
+uv run pkp_forest_belts.py calculate_forest_belt --help
+uv run pkp_forest_belts.py calculate_forest_belt --region "Липецкая область"
+```
+
+Или с активированным окружением:
+
+```bash
+python pkp_forest_belts.py --help
+python pkp_forest_belts.py prepare_limitations --region "Липецкая область"
 ```
 
 ## Использование
@@ -42,7 +78,7 @@ pip install -r requirements.txt
 #### 1. Подготовка слоя ограничений
 
 ```bash
-python pkp_forest_belts.py prepare_limitations [OPTIONS]
+uv run pkp_forest_belts.py prepare_limitations [OPTIONS]
 ```
 
 Подготовка комплексного слоя ограничений для размещения защитных лесных насаждений.
@@ -60,16 +96,16 @@ python pkp_forest_belts.py prepare_limitations [OPTIONS]
 
 ```bash
 # С параметрами по умолчанию
-python pkp_forest_belts.py prepare_limitations
+uv run pkp_forest_belts.py prepare_limitations
 
 # Для другого региона
-python pkp_forest_belts.py prepare_limitations --region "Воронежская область"
+uv run pkp_forest_belts.py prepare_limitations --region "Воронежская область"
 
 # С изменением порога уклона
-python pkp_forest_belts.py prepare_limitations --slope-threshold 15
+uv run pkp_forest_belts.py prepare_limitations --slope-threshold 15
 
 # Просмотр всех параметров
-python pkp_forest_belts.py prepare_limitations --help
+uv run pkp_forest_belts.py prepare_limitations --help
 ```
 
 **Результат:** Файл `result/{region_shortname}_limitations.gpkg` со слоем ограничений.
@@ -79,7 +115,7 @@ python pkp_forest_belts.py prepare_limitations --help
 #### 2. Расчет защитных лесных насаждений
 
 ```bash
-python pkp_forest_belts.py calculate_forest_belt [OPTIONS]
+uv run pkp_forest_belts.py calculate_forest_belt [OPTIONS]
 ```
 
 Расчет защитных лесных насаждений для указанного региона.
@@ -97,18 +133,18 @@ python pkp_forest_belts.py calculate_forest_belt [OPTIONS]
 
 ```bash
 # С параметрами по умолчанию
-python pkp_forest_belts.py calculate_forest_belt
+uv run pkp_forest_belts.py calculate_forest_belt
 
 # Для другого региона
-python pkp_forest_belts.py calculate_forest_belt --region "Воронежская область"
+uv run pkp_forest_belts.py calculate_forest_belt --region "Воронежская область"
 
 # С готовым слоем ограничений
-python pkp_forest_belts.py calculate_forest_belt \
+uv run pkp_forest_belts.py calculate_forest_belt \
     --limitation-all-gpkg "result/Lipetskaya_limitations.gpkg" \
     --limitation-all-layer "Lipetskaya_all_limitations"
 
 # Просмотр всех параметров
-python pkp_forest_belts.py calculate_forest_belt --help
+uv run pkp_forest_belts.py calculate_forest_belt --help
 ```
 
 **Результаты:** Файлы GeoPackage в директории `result/` с различными слоями лесополос.
@@ -276,6 +312,64 @@ pkp_forest_belts/
 
 ## Формат данных
 
+### Конфигурация подключения к PostgreSQL
+
+Файл `.secret/.gdcdb` содержит параметры подключения к базе данных PostgreSQL в формате JSON:
+
+```json
+{
+    "host": "your-database-host.com",
+    "port": 5432,
+    "database": "your_database_name",
+    "user": "your_username",
+    "password": "your_password"
+}
+```
+
+**Параметры:**
+- `host` - адрес сервера PostgreSQL (IP или доменное имя)
+- `port` - порт подключения (по умолчанию 5432)
+- `database` - имя базы данных
+- `user` - имя пользователя PostgreSQL
+- `password` - пароль пользователя
+
+**Создание файла:**
+
+```bash
+# Создайте директорию для конфиденциальных данных
+mkdir .secret
+
+# Создайте файл с параметрами подключения
+# Linux/Mac
+cat > .secret/.gdcdb << EOF
+{
+    "host": "localhost",
+    "port": 5432,
+    "database": "geodata",
+    "user": "postgres",
+    "password": "your_password"
+}
+EOF
+
+# Windows (PowerShell)
+@"
+{
+    "host": "localhost",
+    "port": 5432,
+    "database": "geodata",
+    "user": "postgres",
+    "password": "your_password"
+}
+"@ | Out-File -FilePath .secret\.gdcdb -Encoding utf8
+```
+
+**Важно:** 
+- Файл `.secret/.gdcdb` должен быть добавлен в `.gitignore` для предотвращения утечки учетных данных
+- База данных должна иметь установленное расширение PostGIS
+- Пользователь должен иметь права на чтение таблиц и создание временных таблиц
+
+---
+
 ### PostgreSQL таблицы
 
 - **Регионы** - границы регионов РФ с геометрией
@@ -321,7 +415,7 @@ GeoPackage файлы в директории `result/` со слоями:
 
 ## Авторы
 
-НИУ ВШЭ, Лаборатория геоданных
+НИУ ВШЭ, Центр геоданных, 2025
 
 ## Лицензия
 
