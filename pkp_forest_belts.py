@@ -1792,8 +1792,9 @@ def belt_merge_limitation_full(
             limitation_full = split_gdf
             
             # Save merged limitations
-            print(f"  - Сохранение результата в слой result/{region_shortname}_limitations.gpkg/{region_shortname}_limitation_full...")
+            
             region_shortname = get_region_shortname(region)
+            print(f"  - Сохранение результата в слой result/{region_shortname}_limitations.gpkg/{region_shortname}_limitation_full...")
             if region_shortname is None:
                 region_shortname = "region"
             limitation_full.to_file(
@@ -3869,6 +3870,7 @@ def prepare_limitations(
     )
 
     # Merge all limitations into a single GeoDataFrame
+    print("- Объединение ограничений в общий слой...")
     src_gdfs = [
         ("water_poly", water_poly),
         ("water_lines_buf", water_lines_buf),
@@ -3974,13 +3976,16 @@ def prepare_limitations(
         merged_gdf = split_gdf
         
         # Save merged limitations
+        
         region_shortname = get_region_shortname(region)
+        print(f"- Сохранение результата в слой result/{region_shortname}_limitations.gpkg/{region_shortname}_all_limitations...")
         if region_shortname is None:
             region_shortname = "region"
         merged_gdf.to_file(
             f"result/{region_shortname}_limitations.gpkg",
             layer=f"{region_shortname}_all_limitations"
         )
+        print(f"###Расчет ограничений для региона {region} выполнен успешно!")
         return merged_gdf
     return None
 
