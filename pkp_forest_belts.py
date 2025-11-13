@@ -750,6 +750,11 @@ def prepare_water_limitations(
         result_gpkg (str, optional): относительный путь к Geopackage для сохранения результатов.
         buffer_distance (int, optional): расстояние первого буфера от линейных объектов в м. Будет рассчитан в UTM с осевым меридианом в центроиде объекта или в LAEA с центром в центроиде объекта. Defaults to 5.
         buffer_crs (str, optional): проекция для расчета буферов. 'utm' или 'laea'. Defaults to 'utm'.
+    
+    Notes:
+        Таблица water_line_table должна содержать поля: fclass, name, osm_id, geom.
+        Таблица water_pol_table должна содержать поля: fclass, name, osm_id, geom.
+        Таблица regions_table должна содержать поля: region, geom.
     """
     # try:
     #     gdf_l = gpd.read_file(source_water_line)
@@ -960,6 +965,10 @@ def prepare_slope_limitations(
     Побочные эффекты:
     - Читает файл настроек подключения к БД, указанный в `postgres_info` (по умолчанию '.secret/.gdcdb').
     - Создаёт временную папку `fabdem/` в текущем рабочем каталоге и временные растровые файлы (которые затем удаляются).
+    
+    Примечания:
+    - Таблица fabdem_tiles_table должна содержать поля: tile_name, geom.
+    - Таблица regions_table должна содержать поля: region, geom.
     - Сохраняет итоговый слой в GeoPackage `result/{region_shortname}_limitations.gpkg` с именем слоя
       `{region_shortname}_{rescale_size}m_sl_more_{slope_threshold}_vector`.
 
@@ -1200,6 +1209,12 @@ def prepare_wetlands_limitations(
     wetlands_table='osm.osm_wetlands_russia_final',
     region_buf_size=0,
 ):
+    """Подготовка ограничений по заболоченным территориям.
+    
+    Notes:
+        Таблица wetlands_table должна содержать поле: geom.
+        Таблица regions_table должна содержать поля: region, geom.
+    """
     print(f"- Начинаю расчет болотных ограничений для региона {region}...")
     print(f"  - Выборка данных из базы...")
     try:
@@ -1243,11 +1258,18 @@ def prepare_wetlands_limitations(
 
 def prepare_soil_limitations(
     postgres_info='.secret/.gdcdb',
-    region='', 
+    region='Липецкая область', 
     regions_table='admin.hse_russia_regions', 
     soil_table='egrpr_esoil_ru.soil_map_m2_5_v',
     region_buf_size=0,
 ):
+    """Подготовка ограничений по неподходящим почвам.
+    
+    Notes:
+        Таблица soil_table должна содержать поля: soil0 (код типа почвы), geom.
+        Фильтруются почвы с soil0 между 163 и 171 (болотные и солончаковые).
+        Таблица regions_table должна содержать поля: region, geom.
+    """
     print(f"- Начинаю расчет почвенных ограничений для региона {region}...")
     print(f"  - Выборка данных из базы...")
     try:
@@ -1293,6 +1315,154 @@ def prepare_soil_limitations(
     return None
 
 
+def prepare_aerodrome_limitations(
+    postgres_info='.secret/.gdcdb',
+    region='Липецкая область', 
+    regions_table='admin.hse_russia_regions', 
+    osm_transport_table='osm.gis_osm_transport_a_free',
+    region_buf_size=0,
+):
+    """
+    Подготовка ограничений по аэродромам (аэропорты и аэродромы).
+    
+    Функция извлекает из базы данных информацию об аэродромах (аэропортах и аэрополях) 
+    на территории указанного региона и формирует слой ограничений. Аэродромы представляют 
+    собой территории, где размещение защитных лесных насаждений нецелесообразно или 
+    невозможно из-за требований авиационной безопасности.
+    
+    Алгоритм работы:
+    1. Подключается к PostgreSQL базе данных
+    2. Извлекает границу региона из таблицы регионов
+    3. Опционально расширяет границу региона на заданное расстояние (region_buf_size)
+    4. Выполняет пространственный запрос для получения аэродромов (fclass: 'airport', 'airfield')
+    5. Обрезает полученные данные по границе региона
+    6. Сохраняет результат в GeoPackage
+    
+    Parameters
+    ----------
+    postgres_info : str, optional
+        Путь к файлу с параметрами подключения к PostgreSQL базе данных в формате JSON.
+        Файл должен содержать JSON-объект с параметрами подключения:
+            {
+                "host": "адрес_сервера",
+                "port": 5432,
+                "database": "имя_базы_данных",
+                "user": "имя_пользователя",
+                "password": "пароль"
+            }
+        По умолчанию '.secret/.gdcdb'.
+    region : str, optional
+        Название региона для обработки (должно соответствовать названию в таблице регионов).
+        По умолчанию 'Липецкая область'.
+    regions_table : str, optional
+        Полное имя таблицы с границами регионов в формате 'schema.table'.
+        По умолчанию 'admin.hse_russia_regions'.
+    osm_transport_table : str, optional
+        Полное имя таблицы с транспортными объектами из OpenStreetMap в формате 'schema.table'.
+        Таблица должна содержать поле 'fclass' с классификацией объектов, включая 
+        'airport' (аэропорты) и 'airfield' (аэродромы).
+        По умолчанию 'osm.gis_osm_transport_a_free'.
+    region_buf_size : int, optional
+        Размер буфера вокруг границы региона в метрах для захвата приграничных аэродромов.
+        Если 0, буфер не применяется. По умолчанию 0.
+    
+    Returns
+    -------
+    geopandas.GeoDataFrame or None
+        GeoDataFrame с аэродромами в системе координат EPSG:4326.
+        Содержит все поля из исходной таблицы osm_transport_table, включая:
+        - fclass : str - класс объекта ('airport' или 'airfield')
+        - name : str - название аэродрома (если доступно)
+        - geom : geometry - геометрия аэродрома (Polygon или MultiPolygon)
+        
+        Возвращает None, если аэродромы не найдены на территории региона.
+    
+    Side Effects
+    ------------
+    - Сохраняет результат в файл 'result/{region_shortname}_limitations.gpkg' 
+      в слой '{region_shortname}_aerodrome'
+    - Выводит информационные сообщения о ходе выполнения в консоль
+    
+    Examples
+    --------
+    >>> # Базовое использование с параметрами по умолчанию
+    >>> aerodrome_gdf = prepare_aerodrome_limitations()
+    
+    >>> # Обработка другого региона
+    >>> aerodrome_gdf = prepare_aerodrome_limitations(region='Воронежская область')
+    
+    >>> # С расширением границы региона для захвата приграничных аэродромов
+    >>> aerodrome_gdf = prepare_aerodrome_limitations(
+    ...     region='Липецкая область',
+    ...     region_buf_size=5000
+    ... )
+    
+    >>> # Использование с пользовательской таблицей транспорта
+    >>> aerodrome_gdf = prepare_aerodrome_limitations(
+    ...     postgres_info='.secret/custom_db',
+    ...     region='Тамбовская область',
+    ...     osm_transport_table='custom_schema.transport_objects'
+    ... )
+    
+    Notes
+    -----
+    - Функция требует подключения к PostgreSQL базе данных с расширением PostGIS
+    - Таблица osm_transport_table должна содержать геометрии в системе координат EPSG:4326
+    - Функция фильтрует только объекты с fclass='airport' или fclass='airfield'
+    - Если в регионе нет аэродромов, функция вернет None и не создаст выходной файл
+    - Результат обрезается строго по границе региона (без буфера), даже если region_buf_size > 0
+    
+    See Also
+    --------
+    prepare_limitations : Основная функция подготовки всех ограничений
+    prepare_settlements_limitations : Подготовка ограничений по населенным пунктам
+    prepare_road_limitations : Подготовка ограничений по дорогам
+    """
+    print(f"- Начинаю расчет ограничений аэродромов для региона {region}...")
+    print(f"  - Выборка данных из базы...")
+    try:
+        with open(postgres_info, encoding='utf-8') as f:
+            pg = json.load(f)
+    except:
+        raise
+    try:
+        engine = sqlalchemy.create_engine(
+            f"postgresql+psycopg2://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{pg['database']}",
+            connect_args={
+                "sslmode": "verify-full",
+                "target_session_attrs": "read-write"
+            },
+        )
+    except:
+        raise
+    try:
+        sql = f"select * from {regions_table} where lower(region) = '{region.lower()}';"
+        region_gdf = gpd.read_postgis(sql, engine)
+        if region_buf_size > 0:
+            region_buffer = calculate_geod_buffers(region_gdf, 'laea', 'value', region_buf_size, geom_field='geom')
+            region_gdf = region_gdf.set_geometry(region_buffer)
+        sql = f"select * from {osm_transport_table} a " \
+              f"where ST_Intersects((select ST_Buffer(geom::geography, {region_buf_size})::geometry from {regions_table} where lower(region) = '{region.lower()}' limit 1), a.geom) " \
+              f"and a.fclass in ('airport', 'airfield');"
+        aerodrome_gdf = gpd.read_postgis(sql, engine)
+        pass
+    except:
+        raise
+    if not aerodrome_gdf.empty:
+        region_shortname = get_region_shortname(region)
+        print(f"  - Обрезка данных по границе региона...")
+        aerodrome_gdf = aerodrome_gdf.clip(region_gdf)
+        print(f"  - Сохранение итогового слоя result/{region_shortname}_limitations.gpkg/{region_shortname}_aerodrome...")
+        aerodrome_gdf.to_file(
+            # 'result/soil_limitations.gpkg', 
+            f"result/{region_shortname}_limitations.gpkg", 
+            layer=f"{region_shortname}_aerodrome"
+        )
+        print(f"- Расчет ограничений аэродромов для региона {region} завершен успешно!")
+        return aerodrome_gdf
+    return None
+
+
 def prepare_settlements_limitations(
     postgres_info='.secret/.gdcdb',
     region='', 
@@ -1301,6 +1471,14 @@ def prepare_settlements_limitations(
     osm_table='osm.gis_osm_places_a_free',
     region_buf_size=0,
 ):
+    """Подготовка ограничений по населенным пунктам.
+    
+    Notes:
+        Таблица nspd_table должна содержать поле: geom (в EPSG:3857).
+        Таблица osm_table должна содержать поля: fclass, geom.
+        Исключаются объекты OSM с fclass: county, region, island.
+        Таблица regions_table должна содержать поля: region, geom.
+    """
     print(f"- Начинаю расчет ограничений населенных пунктов для региона {region}...")
     print(f"  - Выборка данных из базы...")
     try:
@@ -1385,11 +1563,19 @@ def prepare_settlements_limitations(
 
 def prepare_oopt_limitations(
     postgres_info='.secret/.gdcdb',
-    region='', 
+    region='Липецкая область', 
     regions_table='admin.hse_russia_regions', 
     oopt_table='ecology.pkp_oopt_russia_2024',
     region_buf_size=0,
 ):
+    """Подготовка ограничений по ООПТ.
+    
+    Notes:
+        Таблица oopt_table должна содержать поля: name, actuality, is_hunter_reserve, geom.
+        Исключаются охотничьи угодья (name содержит 'охотнич' или is_hunter_reserve=true).
+        Фильтруются только действующие ООПТ (actuality содержит 'действующ').
+        Таблица regions_table должна содержать поля: region, geom.
+    """
     print(f"- Начинаю расчет ограничений ООПТ для региона {region}...")
     print(f"  - Выборка данных из базы...")
     try:
@@ -1419,7 +1605,8 @@ def prepare_oopt_limitations(
             f"oopt.geom" \
             f") " \
             f"and oopt.name !~* 'охотнич' " \
-            f"and oopt.actuality ~* 'действующ';"
+            f"and oopt.actuality ~* 'действующ' " \
+            f"and not is_hunter_reserve or is_hunter_reserve is null;"
         oopt_gdf = gpd.read_postgis(sql, engine)
         pass
     except:
@@ -3196,7 +3383,7 @@ def belt_calculate_road_belt(
             f"(select ST_Buffer(geom::geography, {region_buf_size})::geometry from {regions_table} where lower(region) = '{region.lower()}' limit 1), " \
             f"road.geom" \
             f")) " \
-            f"and ((road.fclass in ('primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')) or (road.fclass = 'unclassified' and road.ref !~ ' .*'));"
+            f"and ((road.fclass in ('primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'trunk', 'trunk_link', 'motorway', 'motorway_link')) or (road.fclass = 'unclassified' and road.ref !~ '^ .*'));"
 
         with engine.connect() as conn:
             road_gdf = gpd.read_postgis(sql, conn)
@@ -3485,9 +3672,10 @@ def belt_forest_belt_nature(
         gdfs[i][1]['type_id'] = i + 1
         gdfs[i][1]['type_name'] = gdfs[i][0]
     
-    forest_belt_nature = gpd.GeoDataFrame()
-    for i, g in enumerate(gdfs):
-        forest_belt_nature = pd.concat([forest_belt_nature, gdfs[i][1]], ignore_index=True)
+    # Concatenate all GeoDataFrames properly
+    gdf_list = [gdfs[i][1] for i in range(len(gdfs))]
+    forest_belt_nature = pd.concat(gdf_list, ignore_index=True)
+    forest_belt_nature = gpd.GeoDataFrame(forest_belt_nature, geometry='geometry', crs=gdf_list[0].crs)
     print(f"  - Заполнение поля belt_id...")
     forest_belt_nature['belt_id'] = range(1, len(forest_belt_nature) + 1)
     if forest_belt_nature.empty:
@@ -3645,6 +3833,7 @@ def prepare_limitations(
     hydro_buffer_crs='utm',
     wetlands_table='osm.osm_wetlands_russia_final',
     soil_table='egrpr_esoil_ru.soil_map_m2_5_v',
+    osm_transport_table='osm.gis_osm_transport_a_free',
     fabdem_tiles_table='elevation.fabdem_v1_2_tiles',
     slope_threshold=12,
     fabdem_zip_path=r"\\172.21.204.20\geodata\_PROJECTS\pkp\vm0047_prod\dem_fabdem",
@@ -3719,6 +3908,10 @@ def prepare_limitations(
     soil_table : str, optional
         Полное имя таблицы с почвенными данными.
         По умолчанию 'egrpr_esoil_ru.soil_map_m2_5_v'.
+    osm_transport_table : str, optional
+        Полное имя таблицы с транспортными объектами из OpenStreetMap.
+        Используется для извлечения данных об аэродромах (аэропортах и аэрополях).
+        По умолчанию 'osm.gis_osm_transport_a_free'.
     fabdem_tiles_table : str, optional
         Полное имя таблицы с метаданными тайлов FABDEM (цифровая модель рельефа).
         По умолчанию 'elevation.fabdem_v1_2_tiles'.
@@ -3797,6 +3990,7 @@ def prepare_limitations(
     prepare_water_limitations : Подготовка ограничений по водным объектам
     prepare_wetlands_limitations : Подготовка ограничений по заболоченным территориям
     prepare_soil_limitations : Подготовка ограничений по почвам
+    prepare_aerodrome_limitations : Подготовка ограничений по аэродромам
     prepare_slope_limitations : Подготовка ограничений по уклонам
     prepare_settlements_limitations : Подготовка ограничений по населенным пунктам
     prepare_oopt_limitations : Подготовка ограничений по ООПТ
@@ -3830,6 +4024,14 @@ def prepare_limitations(
         regions_table=regions_table,
         soil_table=soil_table,
         region_buf_size=region_buf_size,
+    )
+
+    aerodrome = prepare_aerodrome_limitations(
+        postgres_info=postgres_info,
+        region=region, 
+        regions_table=regions_table, 
+        osm_transport_table=osm_transport_table,
+        region_buf_size=0,
     )
 
     slope_more_12 = prepare_slope_limitations(
@@ -3877,6 +4079,7 @@ def prepare_limitations(
         ("water_prot_zone", water_prot_zone),
         ("wetland", wetland),
         ("soil", soil),
+        ("aerodrome", aerodrome),
         ("slope_more_12", slope_more_12),
         ("poppol_merge", poppol_merge),
         ("oopt", oopt),
@@ -4306,6 +4509,11 @@ def main():
         help='Полное имя таблицы с почвенными данными'
     )
     parser_prep.add_argument(
+        '--osm-transport-table',
+        default='osm.gis_osm_transport_a_free',
+        help='Полное имя таблицы с полигонами транспортных объектов, включая аэропорты и аэродромы'
+    )
+    parser_prep.add_argument(
         '--fabdem-tiles-table',
         default='elevation.fabdem_v1_2_tiles',
         help='Полное имя таблицы с метаданными тайлов FABDEM'
@@ -4494,6 +4702,7 @@ def main():
             hydro_buffer_crs=args.hydro_buffer_crs,
             wetlands_table=args.wetlands_table,
             soil_table=args.soil_table,
+            osm_transport_table=args.osm_transport_table,
             fabdem_tiles_table=args.fabdem_tiles_table,
             slope_threshold=args.slope_threshold,
             fabdem_zip_path=args.fabdem_zip_path,
@@ -4548,7 +4757,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # main()
     
     # current_dir = os.getcwd()
 
@@ -4586,9 +4795,13 @@ if __name__ == '__main__':
     #     region='Калужская область'
     # )
 
-    # prepare_oopt_limitations(
-    #     region='Липецкая область'
-    # )
+    prepare_oopt_limitations(
+        region='Липецкая область'
+    )
+
+    prepare_aerodrome_limitations(
+        region='Липецкая область'
+    )
 
     # prepare_forest_limitations(
     #     region='Липецкая область'
