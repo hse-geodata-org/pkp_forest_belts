@@ -713,9 +713,9 @@ def calculate_geod_buffers(
         # вычисление буфера в текущей проекции UTM
         try:
             if buffer_dist_source == 'value':
-                buffer = shapely.buffer(shapely.transform(row[i_gdf_geom_name], transformer1.transform, interleaved=False), float(buffer_distance), single_sided=single_sided)
+                buffer = shapely.buffer(shapely.transform(row[i_gdf_geom_name], transformer1.transform, interleaved=False), float(buffer_distance), single_sided=single_sided, quad_segs=4)
             elif buffer_dist_source == 'field':
-                buffer = shapely.buffer(shapely.transform(row[i_gdf_geom_name], transformer1.transform, interleaved=False), float(row[buffer_distance]), single_sided=single_sided)
+                buffer = shapely.buffer(shapely.transform(row[i_gdf_geom_name], transformer1.transform, interleaved=False), float(row[buffer_distance]), single_sided=single_sided, quad_segs=4)
             else:
                 raise ValueError("Неверно задан параметр buffer_dist_source")
             # Пересчет буфера обратно в WGS-1984
@@ -2166,6 +2166,9 @@ def belt_calculate_arable_buffer_eliminate(
         # option d: gaussian smooth (from Claude Sonnet 4.5)
         print("  - Сглаживание геометрии...")
         g_proj["geometry"] = g_proj["geometry"].apply(lambda geom: gaussian_smooth(geom, sigma=1))
+
+        #############УПРОЩЕНИЕ ПОСЛЕ СГЛАЖИВАНИЯ#################
+        g_proj["geometry"] = g_proj["geometry"].simplify(tolerance=0.1, preserve_topology=True)
         
         arable_buffer_smooth = g_proj.to_crs(4326)
 
@@ -2274,6 +2277,8 @@ def belt_calculate_centerlines(
                 cl_geom = cl_geom.simplify(tolerance=simplify_tolerance, preserve_topology=True)
             if smooth:
                 cl_geom = gaussian_smooth(cl_geom, sigma=smooth_sigma)
+                #############УПРОЩЕНИЕ ПОСЛЕ СГЛАЖИВАНИЯ#################
+                cl_geom = cl_geom.simplify(tolerance=0.1, preserve_topology=True)
             if cl_geom.length >= min_branch_length_m:
                 lines.append(cl_geom)
                 snowflakes.append(cl_geom)
@@ -2292,6 +2297,8 @@ def belt_calculate_centerlines(
                     longest_ls_exact = longest_ls_exact.simplify(tolerance=simplify_tolerance, preserve_topology=True)
                 if smooth:
                     longest_ls_exact = gaussian_smooth(longest_ls_exact, sigma=smooth_sigma)
+                    #############УПРОЩЕНИЕ ПОСЛЕ СГЛАЖИВАНИЯ#################
+                    longest_ls_exact = longest_ls_exact.simplify(tolerance=0.1, preserve_topology=True)
                 lines.append(longest_ls_exact)
 
     if not lines:
@@ -2442,6 +2449,8 @@ def belt_classify_main_gulch(
     belt_line = belt_line.set_geometry(belt_buffers_geom2)
     if smooth:
         belt_line[belt_line.geometry.name] = belt_line[belt_line.geometry.name].apply(lambda geom: gaussian_smooth(geom, sigma=1))
+        #############УПРОЩЕНИЕ ПОСЛЕ СГЛАЖИВАНИЯ#################
+        belt_line[belt_line.geometry.name] = belt_line[belt_line.geometry.name].simplify(tolerance=0.000001, preserve_topology=True)
 
     print(f"  - выделение и сохранение слоев {region_shortname}_main_belt и {region_shortname}_gully_belt...")
     # Save main belts (type == 'основные') as a separate layer
@@ -2929,6 +2938,8 @@ def belt_calculate_forestation(
         #         layer=f'{region_shortname}_forestation_beforeSmooth'
         #         )
         final_gdf["geometry"] = final_gdf["geometry"].apply(lambda geom: gaussian_smooth(geom, sigma=1))
+        #############УПРОЩЕНИЕ ПОСЛЕ СГЛАЖИВАНИЯ#################
+        final_gdf["geometry"] = final_gdf["geometry"].simplify(tolerance=0.1, preserve_topology=True)
         final_gdf = final_gdf.to_crs(4326)
         
         # Расчет площади и фильтрация
@@ -3001,7 +3012,7 @@ def belt_calculate_secondary_belt(
         raise
     try:
         sql = f"select gid, fclass, osm_id, " \
-            f"ST_Buffer(geom::geography, {road_one_side_buf_size_m}, 'side=left')::geometry as geom " \
+            f"ST_Buffer(geom::geography, {road_one_side_buf_size_m}, 'quad_segs=4 side=left')::geometry as geom " \
             f"from {road_table} road " \
             f"where (ST_Intersects(" \
             f"(select "
@@ -3807,6 +3818,9 @@ def belt_forest_belt_final(
     keep_fields = ['belt_id', 'belt_fid', 'type_id', 'type_name', 'area_ha', 'reg_id', 'reg_name', 'mun_id', 'mun_name', 'ic', 'veg_id', 'gid', 'geom', 'geometry']
     existing_fields = [f for f in keep_fields if f in forest_belt_final.columns]
     forest_belt_final = forest_belt_final[existing_fields]
+
+    # print(f"  - Упрощение геометрии с сохранением топологии...")
+    # forest_belt_final['geometry'] = forest_belt_final['geometry'].simplify(tolerance=0.000001, preserve_topology=True)
     
     if forest_belt_final is not None and not forest_belt_final.empty:
         print(f"  - Сохранение результата в слой result/{region_shortname}_limitations.gpkg/{region_shortname}_forest_belt_final...")
