@@ -4488,7 +4488,7 @@ def main():
     parser_prep.add_argument(
         '--region-buf-size',
         type=int,
-        default=5000,
+        default=0,
         help='Размер буфера вокруг границы региона в метрах'
     )
     parser_prep.add_argument(
